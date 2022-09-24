@@ -84,22 +84,25 @@ def parse_args(args=None):
     parser.add_argument('--nentity', type=int, default=0, help='DO NOT MANUALLY SET')
     parser.add_argument('--nrelation', type=int, default=0, help='DO NOT MANUALLY SET')
 
+
+
+    parser.add_argument('--freeze_entity_embedding', action='store_true', help='pretrained weight of model')
+    parser.add_argument('--freeze_relation_embedding', action='store_true', help='pretrained weight of model')
+    parser.add_argument('--pretrained', default=None, help='whether to used pretrained weight of model')
+    parser.add_argument('--pretrained_path', type=str, default=None, help='pretrained weight of model')
+
+
     # hyper-parameter for CIBLE-RotatE
     parser.add_argument('--weight', type=float, default=1.0, help='weight')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='gradient_accumulation_steps')
     parser.add_argument('--activation', type=str, default='none', help='activation function')
     parser.add_argument('--normalize', action='store_true', help='normalize')
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature of score')
-    parser.add_argument('--mlp', action='store_true', help='temperature of score')
-    parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')
-
-
-    parser.add_argument('--pretrained', action='store_true', help='whether to used pretrained weight of model')
-    parser.add_argument('--pretrained_path', type=str, default=None, help='pretrained weight of model')
-    parser.add_argument('--freeze_entity_embedding', action='store_true', help='pretrained weight of model')
-    parser.add_argument('--freeze_relation_embedding', action='store_true', help='pretrained weight of model')
-    
-    parser.add_argument('--method', type=str, default="default", help='margin loss or crossentropy')
+    parser.add_argument('--mlp', default=False, help='whether to use mlp')
+    parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')    
+    parser.add_argument('--r_type', type=str, default='diag')
+    parser.add_argument('--im_cal', type=str, default='cosine')
+    parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
     parser.add_argument('--pooling', type=str, default='sum')
     
     return parser.parse_args(args)
@@ -259,22 +262,19 @@ def main(args):
     #All true triples
     all_true_triples = train_triples + valid_triples + test_triples
     
-    if args.method == "default":
-        kge_model = KGEModel(
-            args=args,
-            model_name=args.model,
-            nentity=nentity,
-            nrelation=nrelation,
-            hidden_dim=args.hidden_dim,
-            gamma=args.gamma,
-            weight=args.weight,
-            activation=args.activation,
-            double_entity_embedding=args.double_entity_embedding,
-            double_relation_embedding=args.double_relation_embedding,
-            train_triples=train_triples,
-        )
-    else:
-        raise NotImplementedError
+    kge_model = KGEModel(
+        args=args,
+        model_name=args.model,
+        nentity=nentity,
+        nrelation=nrelation,
+        hidden_dim=args.hidden_dim,
+        gamma=args.gamma,
+        weight=args.weight,
+        activation=args.activation,
+        double_entity_embedding=args.double_entity_embedding,
+        double_relation_embedding=args.double_relation_embedding,
+        train_triples=train_triples,
+    )
     # elif args.method == "crossentropy":
     #     kge_model = KGEV2Model(
     #         args=args,
@@ -303,12 +303,16 @@ def main(args):
 
         kge_model.entity_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'entity_embedding.npy'))).cuda()
         kge_model.relation_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'relation_embedding.npy'))).cuda()      
-        args.pretrained_path = None
         logging.info("Loaded pretrained model from %s" % path)
 
     if args.pretrained_path is not None:
         kge_model.entity_embedding.data = torch.from_numpy(np.load(os.path.join(args.pretrained_path, 'entity_embedding.npy'))).cuda()
         kge_model.relation_embedding.data = torch.from_numpy(np.load(os.path.join(args.pretrained_path, 'relation_embedding.npy'))).cuda()
+
+        model_state_dict = torch.load(os.path.join(args.pretrained_path, 'checkpoint'))
+        if 'head_m_r' in model_state_dict['model_state_dict']:
+            kge_model.head_m_r.data = model_state_dict['model_state_dict']['head_m_r']
+            kge_model.tail_m_r.data = model_state_dict['model_state_dict']['tail_m_r']
         logging.info("Loaded pretrained model from %s" % args.pretrained_path)
 
     if args.do_train:
@@ -371,9 +375,12 @@ def main(args):
         logging.info('adversarial_temperature = %f' % args.adversarial_temperature)
     
     # Set valid dataloader as it would be evaluated during training
+    train_step = kge_model.train_step
+    test_step = kge_model.test_step
+
     if args.do_valid:
         logging.info('Evaluating on Test Dataset...')
-        metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
+        metrics = test_step(kge_model, test_triples, all_true_triples, args)
         log_metrics('Test', step, metrics)
         for k, v in metrics.items():
             if k not in best_test_metrics:
@@ -395,7 +402,7 @@ def main(args):
         #Training Loop
         for step in range(init_step, args.max_steps):
             
-            log = kge_model.train_step(kge_model, optimizer, train_iterator, args)
+            log = train_step(kge_model, optimizer, train_iterator, args)
             
             training_logs.append(log)
             
@@ -424,8 +431,9 @@ def main(args):
                 training_logs = []
                 
             if args.do_valid and step % args.valid_steps == 0 and step != 0:
+                # we temporary comment these lines to accelerate the training.
                 # logging.info('Evaluating on Valid Dataset...')
-                # metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+                # metrics = test_step(kge_model, valid_triples, all_true_triples, args)
                 # log_metrics('Valid', step, metrics)
                 # for k, v in metrics.items():
                 #     if k not in best_valid_metrics:
@@ -440,7 +448,7 @@ def main(args):
                 # log_metrics('Best-Valid', step, best_valid_metrics)
 
                 logging.info('Evaluating on Test Dataset...')
-                metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
+                metrics = test_step(kge_model, test_triples, all_true_triples, args)
                 log_metrics('Test', step, metrics)
                 for k, v in metrics.items():
                     if k not in best_test_metrics:
@@ -461,21 +469,22 @@ def main(args):
         }
         save_model(kge_model, optimizer, save_variable_list, args)
         
-    if args.do_valid:
-        logging.info('Evaluating on Valid Dataset...')
-        metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-        log_metrics('Valid', step, metrics)
-        for k, v in metrics.items():
-            if k not in best_valid_metrics:
-                best_valid_metrics[k] = v
-            else:
-                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-                    if best_valid_metrics[k] > v:
-                        best_valid_metrics[k] = v
-                else:
-                    if best_valid_metrics[k] < v:
-                        best_valid_metrics[k] = v
-        log_metrics('Best-Valid', step, best_valid_metrics)
+    # we temporary comment these lines to accelerate the training.
+    # if args.do_valid:
+    #     logging.info('Evaluating on Valid Dataset...')
+    #     metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+    #     log_metrics('Valid', step, metrics)
+    #     for k, v in metrics.items():
+    #         if k not in best_valid_metrics:
+    #             best_valid_metrics[k] = v
+    #         else:
+    #             if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+    #                 if best_valid_metrics[k] > v:
+    #                     best_valid_metrics[k] = v
+    #             else:
+    #                 if best_valid_metrics[k] < v:
+    #                     best_valid_metrics[k] = v
+    #     log_metrics('Best-Valid', step, best_valid_metrics)
 
     if args.do_test:
         logging.info('Evaluating on Test Dataset...')
