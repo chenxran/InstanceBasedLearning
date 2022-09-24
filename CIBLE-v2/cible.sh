@@ -1,0 +1,17 @@
+CUDA_VISIBLE_DEVICES=1 python codes/run.py \
+    --do_train \
+    --cuda \
+    --do_valid \
+    --do_test \
+    --data_path data/umls \
+    --model CIBLERotatE \
+    -lr 1e-4 -b 128 -d 200 \
+    -g 6.0 -a 3.0 -adv -n 128 \
+    --max_steps 10000 \
+    --save_path models/test \
+    --test_batch_size 16 \
+    --valid_steps 1000 \
+    --gradient_accumulation_steps 1 \
+    --weight 1.0 \
+    --pretrained \
+    -de
