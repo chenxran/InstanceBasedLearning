@@ -540,8 +540,8 @@ class KGEModel(nn.Module):
 
         optimizer.zero_grad()
         if args.model in ['IBLERotatE', 'IBLErRotatE']:
-            clamp_norm(model.entity_embedding.data, maxnorm=1, p=2, dim=-1)
-            clamp_norm(model.relation_embedding.data, maxnorm=1, p=2, dim=-1)
+            model.entity_embedding.data = clamp_norm(model.entity_embedding.data, maxnorm=1, p=2, dim=-1)
+            model.relation_embedding.data = clamp_norm(model.relation_embedding.data, maxnorm=1, p=2, dim=-1)
 
         for _ in range(args.gradient_accumulation_steps):
             positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)

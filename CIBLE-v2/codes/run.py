@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from torch.utils.data import DataLoader
-
+import torch.optim.lr_scheduler as lr_scheduler
 from model import KGEModel  # , KGEV2Model
 
 from dataloader import TrainDataset
@@ -356,16 +356,17 @@ def main(args):
             filter(lambda p: p.requires_grad, kge_model.parameters()), 
             lr=current_learning_rate
         )
+        scheduler = lr_scheduler.ExponentialLR(optimizer, 0.9)
 
         if args.training_epochs is not None:
             args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
         if args.evaluate_strategy == "epochs":
             args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
 
-        if args.warm_up_steps:
-            warm_up_steps = args.warm_up_steps
-        else:
-            warm_up_steps = args.max_steps // 2
+        # if args.warm_up_steps:
+        #     warm_up_steps = args.warm_up_steps
+        # else:
+        #     warm_up_steps = args.max_steps // 2
         
         param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
         grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
@@ -378,7 +379,7 @@ def main(args):
         kge_model.load_state_dict(checkpoint['model_state_dict'])
         if args.do_train:
             current_learning_rate = checkpoint['current_learning_rate']
-            warm_up_steps = checkpoint['warm_up_steps']
+            # warm_up_steps = checkpoint['warm_up_steps']
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     else:
         logging.info('Ramdomly Initializing %s Model...' % args.model)
@@ -432,20 +433,20 @@ def main(args):
             
             training_logs.append(log)
             
-            if step >= warm_up_steps:
-                current_learning_rate = current_learning_rate / 10
-                logging.info('Change learning_rate to %f at step %d' % (current_learning_rate, step))
-                optimizer = torch.optim.AdamW(
-                    filter(lambda p: p.requires_grad, kge_model.parameters()), 
-                    lr=current_learning_rate
-                )
-                warm_up_steps = warm_up_steps * 3
+            # if step >= warm_up_steps:
+            #     current_learning_rate = current_learning_rate / 10
+            #     logging.info('Change learning_rate to %f at step %d' % (current_learning_rate, step))
+            #     optimizer = torch.optim.AdamW(
+            #         filter(lambda p: p.requires_grad, kge_model.parameters()), 
+            #         lr=current_learning_rate
+            #     )
+            #     warm_up_steps = warm_up_steps * 3
             
             if step % args.save_checkpoint_steps == 0:
                 save_variable_list = {
                     'step': step, 
                     'current_learning_rate': current_learning_rate,
-                    'warm_up_steps': warm_up_steps
+                    # 'warm_up_steps': warm_up_steps
                 }
                 save_model(kge_model, optimizer, save_variable_list, args)
                 
@@ -488,11 +489,12 @@ def main(args):
                             if best_test_metrics[k] < v:
                                 best_test_metrics[k] = v
                 log_metrics('Best-Test', step, best_test_metrics)
+                scheduler.step()
 
         save_variable_list = {
             'step': step, 
             'current_learning_rate': current_learning_rate,
-            'warm_up_steps': warm_up_steps
+            # 'warm_up_steps': warm_up_steps
         }
         save_model(kge_model, optimizer, save_variable_list, args)
         
