@@ -42,27 +42,6 @@ def construct_h_list(cls):
         cls.head_batch_h_list[key]["t"] = torch.tensor(cls.head_batch_h_list[key]["t"]).cuda()
 
 
-
-def at_least_eps(x: torch.FloatTensor) -> torch.FloatTensor:
-    """Make sure a tensor is greater than zero."""
-    # get datatype specific epsilon
-    eps = torch.finfo(x.dtype).eps
-    # clamp minimum value
-    return x.clamp(min=eps)
-
-
-def clamp_norm(
-    x: torch.Tensor,
-    maxnorm: float,
-    p: Union[str, int] = "fro",
-    dim: Union[None, int, Iterable[int]] = None,
-) -> torch.Tensor:
-
-    norm = x.norm(p=p, dim=dim, keepdim=True)
-    mask = (norm < maxnorm).type_as(x)
-    return mask * x + (1 - mask) * (x / at_least_eps(norm) * maxnorm)
-
-
 ACTFN = {
     "none": lambda x: x,
     "relu": torch.relu,
@@ -112,7 +91,6 @@ class KGEModel(nn.Module):
             a=-self.embedding_range.item(), 
             b=self.embedding_range.item()
         )
-        self.entity_embedding.data = clamp_norm(self.entity_embedding.data, maxnorm=1, p=2, dim=-1)
         
         self.relation_embedding = nn.Parameter(torch.zeros(nrelation, self.relation_dim), requires_grad=not args.freeze_relation_embedding)
         nn.init.uniform_(
@@ -120,8 +98,7 @@ class KGEModel(nn.Module):
             a=-self.embedding_range.item(), 
             b=self.embedding_range.item()
         )
-        self.relation_embedding.data = clamp_norm(self.relation_embedding.data, maxnorm=1, p=2, dim=-1)
-        
+
         if model_name == 'pRotatE':
             self.modulus = nn.Parameter(torch.Tensor([[0.5 * self.embedding_range.item()]]))
         
@@ -369,9 +346,9 @@ class KGEModel(nn.Module):
         identity_matrix_score = torch.vstack(identity_matrix_score)
 
         if self.args.sigmoid_rotate:
-            score = (self.weight * torch.sigmoid(rotate_score) + identity_matrix_score) / (1 + self.weight)
+            score = self.weight * torch.sigmoid(rotate_score) + identity_matrix_score * (1 - self.weight)
         else:
-            score = (self.weight * rotate_score + identity_matrix_score) / (1 + self.weight)
+            score = self.weight * rotate_score + identity_matrix_score * (1 - self.weight)
         return score
 
     def IBLERotatE(self, head, relation, tail, relation_id, mode):
@@ -412,21 +389,21 @@ class KGEModel(nn.Module):
             im_relation = torch.sin(phase_relation)
 
             if mode == 'head-batch':
-                re_e1 = re_relation * re_e1 + im_relation * im_e1
-                im_e1 = re_relation * im_e1 - im_relation * re_e1
+                re_e1_score = re_relation * re_e1 + im_relation * im_e1
+                im_e1_score = re_relation * im_e1 - im_relation * re_e1
 
-                re_e2 = re_relation * re_e2 + im_relation * im_e2
-                im_e2 = re_relation * im_e2 - im_relation * re_e2
+                re_e2_score = re_relation * re_e2 + im_relation * im_e2
+                im_e2_score = re_relation * im_e2 - im_relation * re_e2
 
             else:
-                re_e1 = re_e1 * re_relation - im_e1 * im_relation
-                im_e1 = re_e1 * im_relation + im_e1 * re_relation
+                re_e1_score = re_e1 * re_relation - im_e1 * im_relation
+                im_e1_score = re_e1 * im_relation + im_e1 * re_relation
 
-                re_e2 = re_e2 * re_relation - im_e2 * im_relation
-                im_e2 = re_e2 * im_relation + im_e2 * re_relation
+                re_e2_score = re_e2 * re_relation - im_e2 * im_relation
+                im_e2_score = re_e2 * im_relation + im_e2 * re_relation
 
-            re_score = re_e1 - re_e2
-            im_score = im_e1 - im_e2
+            re_score = re_e1_score - re_e2_score
+            im_score = im_e1_score - im_e2_score
 
             score = torch.stack([re_score, im_score], dim = 0)
             score = score.norm(p=2, dim = 0)
@@ -539,9 +516,6 @@ class KGEModel(nn.Module):
         model.train()
 
         optimizer.zero_grad()
-        if args.model in ['IBLERotatE', 'IBLErRotatE']:
-            model.entity_embedding.data = clamp_norm(model.entity_embedding.data, maxnorm=1, p=2, dim=-1)
-            model.relation_embedding.data = clamp_norm(model.relation_embedding.data, maxnorm=1, p=2, dim=-1)
 
         for _ in range(args.gradient_accumulation_steps):
             positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)

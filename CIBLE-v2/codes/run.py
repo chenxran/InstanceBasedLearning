@@ -210,8 +210,9 @@ def main(args):
     set_seed()
     # args.__dict__.update(json.load(open(os.path.join(args.pretrained_path, 'config.json'))))
     # args.save_path = "/data/chenxingran/CIBLE/CIBLE-v2/models"
-    # args.data_path = "/data/chenxingran/CIBLE/CIBLE-v2/data/kinship"
+    # args.data_path = "/data/chenxingran/CIBLE/CIBLE-v2/data/umls"
     # args.im_cal = 'rotate'
+    # args.pooling = 'mean'
     # args.sigmoid_rotate = True
 
     if (not args.do_train) and (not args.do_valid) and (not args.do_test):
@@ -356,17 +357,16 @@ def main(args):
             filter(lambda p: p.requires_grad, kge_model.parameters()), 
             lr=current_learning_rate
         )
-        scheduler = lr_scheduler.ExponentialLR(optimizer, 0.9)
 
         if args.training_epochs is not None:
             args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
         if args.evaluate_strategy == "epochs":
             args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
 
-        # if args.warm_up_steps:
-        #     warm_up_steps = args.warm_up_steps
-        # else:
-        #     warm_up_steps = args.max_steps // 2
+        if args.warm_up_steps:
+            warm_up_steps = args.warm_up_steps
+        else:
+            warm_up_steps = args.max_steps // 2
         
         param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
         grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
@@ -379,7 +379,7 @@ def main(args):
         kge_model.load_state_dict(checkpoint['model_state_dict'])
         if args.do_train:
             current_learning_rate = checkpoint['current_learning_rate']
-            # warm_up_steps = checkpoint['warm_up_steps']
+            warm_up_steps = checkpoint['warm_up_steps']
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     else:
         logging.info('Ramdomly Initializing %s Model...' % args.model)
@@ -433,20 +433,20 @@ def main(args):
             
             training_logs.append(log)
             
-            # if step >= warm_up_steps:
-            #     current_learning_rate = current_learning_rate / 10
-            #     logging.info('Change learning_rate to %f at step %d' % (current_learning_rate, step))
-            #     optimizer = torch.optim.AdamW(
-            #         filter(lambda p: p.requires_grad, kge_model.parameters()), 
-            #         lr=current_learning_rate
-            #     )
-            #     warm_up_steps = warm_up_steps * 3
+            if step >= warm_up_steps:
+                current_learning_rate = current_learning_rate / 10
+                logging.info('Change learning_rate to %f at step %d' % (current_learning_rate, step))
+                optimizer = torch.optim.AdamW(
+                    filter(lambda p: p.requires_grad, kge_model.parameters()), 
+                    lr=current_learning_rate
+                )
+                warm_up_steps = warm_up_steps * 3
             
             if step % args.save_checkpoint_steps == 0:
                 save_variable_list = {
                     'step': step, 
                     'current_learning_rate': current_learning_rate,
-                    # 'warm_up_steps': warm_up_steps
+                    'warm_up_steps': warm_up_steps
                 }
                 save_model(kge_model, optimizer, save_variable_list, args)
                 
@@ -460,20 +460,20 @@ def main(args):
                 
             if args.do_valid and step % args.valid_steps == 0 and step != 0:
                 # we temporary comment these lines to accelerate the training.
-                logging.info('Evaluating on Valid Dataset...')
-                metrics = test_step(kge_model, valid_triples, all_true_triples, args)
-                log_metrics('Valid', step, metrics)
-                for k, v in metrics.items():
-                    if k not in best_valid_metrics:
-                        best_valid_metrics[k] = v
-                    else:
-                        if k == "MR":
-                            if best_valid_metrics[k] > v:
-                                best_valid_metrics[k] = v
-                        else:
-                            if best_valid_metrics[k] < v:
-                                best_valid_metrics[k] = v
-                log_metrics('Best-Valid', step, best_valid_metrics)
+                # logging.info('Evaluating on Valid Dataset...')
+                # metrics = test_step(kge_model, valid_triples, all_true_triples, args)
+                # log_metrics('Valid', step, metrics)
+                # for k, v in metrics.items():
+                #     if k not in best_valid_metrics:
+                #         best_valid_metrics[k] = v
+                #     else:
+                #         if k == "MR":
+                #             if best_valid_metrics[k] > v:
+                #                 best_valid_metrics[k] = v
+                #         else:
+                #             if best_valid_metrics[k] < v:
+                #                 best_valid_metrics[k] = v
+                # log_metrics('Best-Valid', step, best_valid_metrics)
 
                 logging.info('Evaluating on Test Dataset...')
                 metrics = test_step(kge_model, test_triples, all_true_triples, args)
@@ -489,31 +489,30 @@ def main(args):
                             if best_test_metrics[k] < v:
                                 best_test_metrics[k] = v
                 log_metrics('Best-Test', step, best_test_metrics)
-                scheduler.step()
 
         save_variable_list = {
             'step': step, 
             'current_learning_rate': current_learning_rate,
-            # 'warm_up_steps': warm_up_steps
+            'warm_up_steps': warm_up_steps
         }
         save_model(kge_model, optimizer, save_variable_list, args)
         
     # we temporary comment these lines to accelerate the training.
-    if args.do_valid:
-        logging.info('Evaluating on Valid Dataset...')
-        metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-        log_metrics('Valid', step, metrics)
-        for k, v in metrics.items():
-            if k not in best_valid_metrics:
-                best_valid_metrics[k] = v
-            else:
-                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-                    if best_valid_metrics[k] > v:
-                        best_valid_metrics[k] = v
-                else:
-                    if best_valid_metrics[k] < v:
-                        best_valid_metrics[k] = v
-        log_metrics('Best-Valid', step, best_valid_metrics)
+    # if args.do_valid:
+        # logging.info('Evaluating on Valid Dataset...')
+        # metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+        # log_metrics('Valid', step, metrics)
+        # for k, v in metrics.items():
+        #     if k not in best_valid_metrics:
+        #         best_valid_metrics[k] = v
+        #     else:
+        #         if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+        #             if best_valid_metrics[k] > v:
+        #                 best_valid_metrics[k] = v
+        #         else:
+        #             if best_valid_metrics[k] < v:
+        #                 best_valid_metrics[k] = v
+        # log_metrics('Best-Valid', step, best_valid_metrics)
 
     if args.do_test:
         logging.info('Evaluating on Test Dataset...')
