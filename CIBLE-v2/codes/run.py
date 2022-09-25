@@ -22,7 +22,7 @@ from dataloader import BidirectionalOneShotIterator
 
 import wandb
 from datetime import datetime
-
+from tqdm import tqdm
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -84,13 +84,10 @@ def parse_args(args=None):
     parser.add_argument('--nentity', type=int, default=0, help='DO NOT MANUALLY SET')
     parser.add_argument('--nrelation', type=int, default=0, help='DO NOT MANUALLY SET')
 
-
-
     parser.add_argument('--freeze_entity_embedding', action='store_true', help='pretrained weight of model')
     parser.add_argument('--freeze_relation_embedding', action='store_true', help='pretrained weight of model')
     parser.add_argument('--pretrained', default=None, help='whether to used pretrained weight of model')
     parser.add_argument('--pretrained_path', type=str, default=None, help='pretrained weight of model')
-
 
     # hyper-parameter for CIBLE-RotatE
     parser.add_argument('--weight', type=float, default=1.0, help='weight')
@@ -104,6 +101,11 @@ def parse_args(args=None):
     parser.add_argument('--im_cal', type=str, default='cosine')
     parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
     parser.add_argument('--pooling', type=str, default='sum')
+    parser.add_argument('--sigmoid_rotate', type=bool, default=False)
+
+    parser.add_argument('--training_epochs', type=int, default=None)
+    parser.add_argument('--evaluate_strategy', type=str, default='steps')
+
     
     return parser.parse_args(args)
 
@@ -198,6 +200,11 @@ def log_metrics(mode, step, metrics):
         
 def main(args):
     set_seed()
+    # args.__dict__.update(json.load(open(os.path.join(args.pretrained_path, 'config.json'))))
+    # args.save_path = "/data/chenxingran/CIBLE/CIBLE-v2/models"
+    # args.data_path = "/data/chenxingran/CIBLE/CIBLE-v2/data/kinship"
+    # args.im_cal = 'cosine'
+    # args.sigmoid_rotate = True
 
     if (not args.do_train) and (not args.do_valid) and (not args.do_test):
         raise ValueError('one of train/val/test mode must be choosed.')
@@ -364,8 +371,15 @@ def main(args):
     best_valid_metrics = {}
     best_test_metrics = {}
 
+    if args.training_epochs is not None:
+        args.max_step = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
+    if args.evaluate_strategy == "epochs":
+        args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
+
     logging.info('Start Training...')
     logging.info('init_step = %d' % init_step)
+    logging.info('max_step = %d' % args.max_steps)
+    logging.info('valid_steps = %d' % args.valid_steps)
     logging.info('batch_size = %d' % args.batch_size)
     logging.info('negative_adversarial_sampling = %d' % args.negative_adversarial_sampling)
     logging.info('hidden_dim = %d' % args.hidden_dim)
@@ -400,7 +414,7 @@ def main(args):
         training_logs = []
         
         #Training Loop
-        for step in range(init_step, args.max_steps):
+        for step in tqdm(range(init_step, args.max_steps)):
             
             log = train_step(kge_model, optimizer, train_iterator, args)
             

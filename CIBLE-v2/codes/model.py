@@ -18,6 +18,9 @@ from torch.utils.data import DataLoader
 
 from dataloader import TestDataset
 import wandb
+import math
+from typing import Union, Iterable
+import time
 
 def construct_h_list(cls):
     cls.tail_batch_h_list = [{"h": [], "t": []} for _ in range(cls.nrelation)]
@@ -37,6 +40,27 @@ def construct_h_list(cls):
     for key in range(cls.nrelation):
         cls.head_batch_h_list[key]["h"] = torch.tensor(cls.head_batch_h_list[key]["h"]).cuda()
         cls.head_batch_h_list[key]["t"] = torch.tensor(cls.head_batch_h_list[key]["t"]).cuda()
+
+
+
+def at_least_eps(x: torch.FloatTensor) -> torch.FloatTensor:
+    """Make sure a tensor is greater than zero."""
+    # get datatype specific epsilon
+    eps = torch.finfo(x.dtype).eps
+    # clamp minimum value
+    return x.clamp(min=eps)
+
+
+def clamp_norm(
+    x: torch.Tensor,
+    maxnorm: float,
+    p: Union[str, int] = "fro",
+    dim: Union[None, int, Iterable[int]] = None,
+) -> torch.Tensor:
+
+    norm = x.norm(p=p, dim=dim, keepdim=True)
+    mask = (norm < maxnorm).type_as(x)
+    return mask * x + (1 - mask) * (x / at_least_eps(norm) * maxnorm)
 
 
 ACTFN = {
@@ -64,10 +88,18 @@ class KGEModel(nn.Module):
         )
         self.weight = weight
         
-        self.embedding_range = nn.Parameter(
-            torch.Tensor([(self.gamma.item() + self.epsilon) / hidden_dim]), 
-            requires_grad=False
-        )
+        # if self.args.model in ['CIBLERotatE', 'CIBLErRotatE', 'RotatE']:
+
+        if self.args.model in ['IBLErRotatE', 'IBLERotatE']:
+            self.embedding_range = nn.Parameter(
+                torch.Tensor([6 / math.sqrt(hidden_dim)]),
+                requires_grad=False
+            )
+        else:
+            self.embedding_range = nn.Parameter(
+                torch.Tensor([(self.gamma.item() + self.epsilon) / hidden_dim]), 
+                requires_grad=False
+            )
 
         self.flag = self.model_name not in ["CIBLERotatE", 'IBLErRotatE', 'CIBLErRotatE', 'IBLErRotatE']
         
@@ -80,6 +112,7 @@ class KGEModel(nn.Module):
             a=-self.embedding_range.item(), 
             b=self.embedding_range.item()
         )
+        self.entity_embedding.data = clamp_norm(self.entity_embedding.data, maxnorm=1, p=2, dim=-1)
         
         self.relation_embedding = nn.Parameter(torch.zeros(nrelation, self.relation_dim), requires_grad=not args.freeze_relation_embedding)
         nn.init.uniform_(
@@ -87,6 +120,7 @@ class KGEModel(nn.Module):
             a=-self.embedding_range.item(), 
             b=self.embedding_range.item()
         )
+        self.relation_embedding.data = clamp_norm(self.relation_embedding.data, maxnorm=1, p=2, dim=-1)
         
         if model_name == 'pRotatE':
             self.modulus = nn.Parameter(torch.Tensor([[0.5 * self.embedding_range.item()]]))
@@ -95,8 +129,11 @@ class KGEModel(nn.Module):
         if model_name not in ['TransE', 'DistMult', 'ComplEx', 'RotatE', 'pRotatE', 'CIBLERotatE', 'IBLERotatE', 'CIBLErRotatE', 'IBLErRotatE']:
             raise ValueError('model %s not supported' % model_name)
             
-        if model_name in ['RotatE', 'CIBLERotatE', 'CIBLE', 'CIBLErRotatE', 'IBLErRotatE'] and (not double_entity_embedding or double_relation_embedding):
+        if model_name in ['RotatE'] and (not double_entity_embedding or double_relation_embedding):
             raise ValueError('RotatE should use --double_entity_embedding')
+        
+        if model_name in ['CIBLErRotatE', 'IBLErRotatE', 'CIBLERotatE', 'IBLERotatE'] and (not double_entity_embedding or not double_relation_embedding):
+            logging.warning('CIBLErRotatE and IBLErRotatE should use --double_entity_embedding and --double_relation_embedding')
 
         if model_name == 'ComplEx' and (not double_entity_embedding or not double_relation_embedding):
             raise ValueError('ComplEx should use --double_entity_embedding and --double_relation_embedding')
@@ -142,6 +179,7 @@ class KGEModel(nn.Module):
             self.mlp = nn.Sequential(
                 nn.Linear(self.nentity, self.intermediate_dim),
                 nn.Tanh(),
+                nn.Dropout(p=0.1),
                 nn.Linear(self.intermediate_dim, self.nentity),
             )
 
@@ -330,7 +368,10 @@ class KGEModel(nn.Module):
             identity_matrix_score.append(identity_matrix[i, candidates[i]])
         identity_matrix_score = torch.vstack(identity_matrix_score)
 
-        score = (self.weight * rotate_score + identity_matrix_score) / ( 1 + self.weight)
+        if self.args.sigmoid_rotate:
+            score = (self.weight * torch.sigmoid(rotate_score) + identity_matrix_score) / (1 + self.weight)
+        else:
+            score = (self.weight * rotate_score + identity_matrix_score) / (1 + self.weight)
         return score
 
     def IBLERotatE(self, head, relation, tail, relation_id, mode):
@@ -396,9 +437,9 @@ class KGEModel(nn.Module):
         elif self.args.im_cal == 'cosine':
             if self.rel_aware:
                 e1_score, e2_score = self.rel_aware_trans(e1, e2, relation_id, mode)
-            
-            # e1_score = e1
-            # e2_score = e2
+            else:
+                e1_score = e1
+                e2_score = e2
 
             if self.args.normalize:
                 e1_score = (e1_score / e1_score.norm(dim=2, p=2, keepdim=True))
@@ -469,7 +510,7 @@ class KGEModel(nn.Module):
         # batch_size = int(relation.size(0))
         # negative_sample_size = int(candidates.size(0) / batch_size)
         # head, tail = self.rel_aware_trans(head, tail, relation_id, mode)
-        return self.IBLERotatE(head, relation, tail, relation_id, candidates, mode)
+        return self.IBLERotatE(head, relation, tail, relation_id, mode)
 
     def rel_aware_trans(self, head, tail, relation_id, mode):
         if self.args.r_type == 'diag':
@@ -498,7 +539,10 @@ class KGEModel(nn.Module):
         model.train()
 
         optimizer.zero_grad()
-        
+        if args.model in ['IBLERotatE', 'IBLErRotatE']:
+            clamp_norm(model.entity_embedding.data, maxnorm=1, p=2, dim=-1)
+            clamp_norm(model.relation_embedding.data, maxnorm=1, p=2, dim=-1)
+
         for _ in range(args.gradient_accumulation_steps):
             positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)
 
@@ -540,7 +584,7 @@ class KGEModel(nn.Module):
                 # positive_score = (model.weight * torch.sigmoid(positive_score) + positive_identity_matrix_score) / (1 + model.weight)
 
                 scores = torch.cat([positive_score, negative_score], dim=1) / model.args.temperature
-                labels = (torch.cuda.FloatTensor(scores.size(0)) * 0.).long()
+                labels = torch.zeros(scores.size(0), device=scores.device).long()
 
                 loss = F.cross_entropy(scores, target=labels)
 

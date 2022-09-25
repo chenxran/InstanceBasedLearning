@@ -198,8 +198,8 @@ class TestDataset(Dataset):
     
 class BidirectionalOneShotIterator(object):
     def __init__(self, dataloader_head, dataloader_tail):
-        self.iterator_head = self.one_shot_iterator(dataloader_head)
-        self.iterator_tail = self.one_shot_iterator(dataloader_tail)
+        self.iterator_head = self.one_shot_iterator([_ for _ in dataloader_head])
+        self.iterator_tail = self.one_shot_iterator([_ for _ in dataloader_tail])
         self.step = 0
         
     def __next__(self):
