@@ -20,6 +20,7 @@ from model import KGEModel  # , KGEV2Model
 from dataloader import TrainDataset
 from dataloader import BidirectionalOneShotIterator
 
+import math
 import wandb
 from datetime import datetime
 from tqdm import tqdm
@@ -365,6 +366,9 @@ def main(args):
             warm_up_steps = args.warm_up_steps
         else:
             warm_up_steps = args.max_steps // 2
+        
+        param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
+        grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
 
     if args.init_checkpoint:
         # Restore model from checkpoint directory
@@ -447,6 +451,7 @@ def main(args):
                 
             if step % args.log_steps == 0:
                 metrics = {}
+                metrics = {'gnorm': grad_norm(kge_model), 'pnorm': param_norm(kge_model)}
                 for metric in training_logs[0].keys():
                     metrics[metric] = sum([log[metric] for log in training_logs])/len(training_logs)
                 log_metrics('Training average', step, metrics)
