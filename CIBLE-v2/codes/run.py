@@ -70,7 +70,7 @@ def parse_args(args=None):
                         help='Otherwise use subsampling weighting like in word2vec')
     
     parser.add_argument('-lr', '--learning_rate', default=0.0001, type=float)
-    parser.add_argument('-cpu', '--cpu_num', default=20, type=int)
+    parser.add_argument('-cpu', '--cpu_num', default=10, type=int)
     parser.add_argument('-init', '--init_checkpoint', default=None, type=str)
     parser.add_argument('-save', '--save_path', default=None, type=str)
     parser.add_argument('--max_steps', default=100000, type=int)
@@ -98,7 +98,7 @@ def parse_args(args=None):
     parser.add_argument('--mlp', type=str, default="False", help='whether to use mlp')
     parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')    
     parser.add_argument('--r_type', type=str, default='diag')
-    parser.add_argument('--im_cal', type=str, default='cosine')
+    parser.add_argument('--im_cal', type=str, default='rotate')
     parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
     parser.add_argument('--pooling', type=str, default='sum')
     parser.add_argument('--sigmoid_rotate', type=str, default="False", help='sigmoid rotate')
@@ -193,11 +193,14 @@ def set_logger(args):
     console.setFormatter(formatter)
     logging.getLogger('').addHandler(console)
 
+    wandb.init(project='cible', entity='chenxran', config=args)
+    wandb.run.log_code('.')
+
 def log_metrics(mode, step, metrics):
     '''
     Print the evaluation logs
     '''
-    # wandb.log({"Step": step, **{f"{mode}/{k}": v for k, v in metrics.items()}})
+    wandb.log({"Step": step, **{f"{mode}/{k}": v for k, v in metrics.items()}})
     for metric in metrics:
         logging.info('%s %s at step %d: %f' % (mode, metric, step, metrics[metric]))
 
@@ -207,7 +210,7 @@ def main(args):
     # args.__dict__.update(json.load(open(os.path.join(args.pretrained_path, 'config.json'))))
     # args.save_path = "/data/chenxingran/CIBLE/CIBLE-v2/models"
     # args.data_path = "/data/chenxingran/CIBLE/CIBLE-v2/data/kinship"
-    # args.im_cal = 'cosine'
+    # args.im_cal = 'rotate'
     # args.sigmoid_rotate = True
 
     if (not args.do_train) and (not args.do_valid) and (not args.do_test):

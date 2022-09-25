@@ -430,10 +430,10 @@ class KGEModel(nn.Module):
 
             score = torch.stack([re_score, im_score], dim = 0)
             score = score.norm(p=2, dim = 0)
-            score = self.gamma.item() - score.sum(dim = 2)
+            score = torch.sigmoid(self.gamma.item() - score.sum(dim = 2))
 
             identity_matrix = torch.zeros(e1.size(0), self.nentity, device=e1.device)
-            identity_matrix[:, h_indices.unique().long()] = ACTFN[self.activation](score) # (batch_size, nentity)
+            identity_matrix[:, h_indices.unique().long()] = score # (batch_size, nentity)
         elif self.args.im_cal == 'cosine':
             if self.rel_aware:
                 e1_score, e2_score = self.rel_aware_trans(e1, e2, relation_id, mode)
@@ -445,7 +445,7 @@ class KGEModel(nn.Module):
                 e1_score = (e1_score / e1_score.norm(dim=2, p=2, keepdim=True))
                 e2_score = (e2_score / e2_score.norm(dim=2, p=2, keepdim=True))
 
-            identity_matrix = torch.cuda.FloatTensor(e1_score.size(0), self.nentity) * 0.
+            identity_matrix = torch.zeros(e1.size(0), self.nentity, device=e1.device)
             identity_matrix[:, h_indices.unique().long()] = ACTFN[self.activation](torch.matmul(e1_score, e2_score.permute(0, 2, 1).contiguous()).squeeze(1))
 
         identity_matrix[mask == 0] = -1e9
