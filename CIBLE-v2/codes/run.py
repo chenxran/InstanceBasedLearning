@@ -95,19 +95,23 @@ def parse_args(args=None):
     parser.add_argument('--activation', type=str, default='none', help='activation function')
     parser.add_argument('--normalize', action='store_true', help='normalize')
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature of score')
-    parser.add_argument('--mlp', default=False, help='whether to use mlp')
+    parser.add_argument('--mlp', type=str, default="False" help='whether to use mlp')
     parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')    
     parser.add_argument('--r_type', type=str, default='diag')
     parser.add_argument('--im_cal', type=str, default='cosine')
     parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
     parser.add_argument('--pooling', type=str, default='sum')
-    parser.add_argument('--sigmoid_rotate', type=bool, default=False)
+    parser.add_argument('--sigmoid_rotate', type=str, default="False", help='sigmoid rotate')
 
     parser.add_argument('--training_epochs', type=int, default=None)
     parser.add_argument('--evaluate_strategy', type=str, default='steps')
 
-    
-    return parser.parse_args(args)
+    args = parser.parse_args(args)
+
+    args.sigmoid_rotate = True if args.sigmoid_rotate.lower() == "true" else False
+    args.mlp = True if args.mlp.lower() == "true" else False
+
+    return args
 
 def override_config(args):
     '''
@@ -446,20 +450,20 @@ def main(args):
                 
             if args.do_valid and step % args.valid_steps == 0 and step != 0:
                 # we temporary comment these lines to accelerate the training.
-                # logging.info('Evaluating on Valid Dataset...')
-                # metrics = test_step(kge_model, valid_triples, all_true_triples, args)
-                # log_metrics('Valid', step, metrics)
-                # for k, v in metrics.items():
-                #     if k not in best_valid_metrics:
-                #         best_valid_metrics[k] = v
-                #     else:
-                #         if k == "MR":
-                #             if best_valid_metrics[k] > v:
-                #                 best_valid_metrics[k] = v
-                #         else:
-                #             if best_valid_metrics[k] < v:
-                #                 best_valid_metrics[k] = v
-                # log_metrics('Best-Valid', step, best_valid_metrics)
+                logging.info('Evaluating on Valid Dataset...')
+                metrics = test_step(kge_model, valid_triples, all_true_triples, args)
+                log_metrics('Valid', step, metrics)
+                for k, v in metrics.items():
+                    if k not in best_valid_metrics:
+                        best_valid_metrics[k] = v
+                    else:
+                        if k == "MR":
+                            if best_valid_metrics[k] > v:
+                                best_valid_metrics[k] = v
+                        else:
+                            if best_valid_metrics[k] < v:
+                                best_valid_metrics[k] = v
+                log_metrics('Best-Valid', step, best_valid_metrics)
 
                 logging.info('Evaluating on Test Dataset...')
                 metrics = test_step(kge_model, test_triples, all_true_triples, args)
@@ -484,21 +488,21 @@ def main(args):
         save_model(kge_model, optimizer, save_variable_list, args)
         
     # we temporary comment these lines to accelerate the training.
-    # if args.do_valid:
-    #     logging.info('Evaluating on Valid Dataset...')
-    #     metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-    #     log_metrics('Valid', step, metrics)
-    #     for k, v in metrics.items():
-    #         if k not in best_valid_metrics:
-    #             best_valid_metrics[k] = v
-    #         else:
-    #             if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-    #                 if best_valid_metrics[k] > v:
-    #                     best_valid_metrics[k] = v
-    #             else:
-    #                 if best_valid_metrics[k] < v:
-    #                     best_valid_metrics[k] = v
-    #     log_metrics('Best-Valid', step, best_valid_metrics)
+    if args.do_valid:
+        logging.info('Evaluating on Valid Dataset...')
+        metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+        log_metrics('Valid', step, metrics)
+        for k, v in metrics.items():
+            if k not in best_valid_metrics:
+                best_valid_metrics[k] = v
+            else:
+                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+                    if best_valid_metrics[k] > v:
+                        best_valid_metrics[k] = v
+                else:
+                    if best_valid_metrics[k] < v:
+                        best_valid_metrics[k] = v
+        log_metrics('Best-Valid', step, best_valid_metrics)
 
     if args.do_test:
         logging.info('Evaluating on Test Dataset...')
