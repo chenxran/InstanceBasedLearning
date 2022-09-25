@@ -95,7 +95,7 @@ def parse_args(args=None):
     parser.add_argument('--activation', type=str, default='none', help='activation function')
     parser.add_argument('--normalize', action='store_true', help='normalize')
     parser.add_argument('--temperature', type=float, default=1.0, help='temperature of score')
-    parser.add_argument('--mlp', type=str, default="False" help='whether to use mlp')
+    parser.add_argument('--mlp', type=str, default="False", help='whether to use mlp')
     parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')    
     parser.add_argument('--r_type', type=str, default='diag')
     parser.add_argument('--im_cal', type=str, default='cosine')
