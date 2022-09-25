@@ -355,6 +355,12 @@ def main(args):
             filter(lambda p: p.requires_grad, kge_model.parameters()), 
             lr=current_learning_rate
         )
+
+        if args.training_epochs is not None:
+            args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
+        if args.evaluate_strategy == "epochs":
+            args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
+
         if args.warm_up_steps:
             warm_up_steps = args.warm_up_steps
         else:
@@ -377,11 +383,6 @@ def main(args):
     step = init_step
     best_valid_metrics = {}
     best_test_metrics = {}
-
-    if args.training_epochs is not None:
-        args.max_step = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
-    if args.evaluate_strategy == "epochs":
-        args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
 
     logging.info('Start Training...')
     logging.info('init_step = %d' % init_step)
