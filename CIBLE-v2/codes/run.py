@@ -102,14 +102,13 @@ def parse_args(args=None):
     parser.add_argument('--im_cal', type=str, default='rotate')
     parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
     parser.add_argument('--pooling', type=str, default='sum')
-    parser.add_argument('--sigmoid_rotate', type=str, default="False", help='sigmoid rotate')
 
     parser.add_argument('--training_epochs', type=int, default=None)
     parser.add_argument('--evaluate_strategy', type=str, default='steps')
+    parser.add_argument('--margin', type=bool, default=False)
 
     args = parser.parse_args(args)
 
-    args.sigmoid_rotate = True if args.sigmoid_rotate.lower() == "true" else False
     args.mlp = True if args.mlp.lower() == "true" else False
 
     return args
@@ -359,7 +358,7 @@ def main(args):
         )
 
         if args.training_epochs is not None:
-            args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 50
+            args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * args.training_epochs
         if args.evaluate_strategy == "epochs":
             args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
 

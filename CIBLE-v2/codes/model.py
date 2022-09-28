@@ -80,7 +80,7 @@ class KGEModel(nn.Module):
                 requires_grad=False
             )
 
-        self.flag = self.model_name not in ["CIBLERotatE", 'IBLErRotatE', 'CIBLErRotatE', 'IBLErRotatE']
+        self.flag = self.args.margin # self.model_name not in ["CIBLERotatE", 'IBLErRotatE', 'CIBLErRotatE', 'IBLErRotatE']
         
         self.entity_dim = hidden_dim*2 if double_entity_embedding else hidden_dim
         self.relation_dim = hidden_dim*2 if double_relation_embedding else hidden_dim
@@ -345,10 +345,7 @@ class KGEModel(nn.Module):
             identity_matrix_score.append(identity_matrix[i, candidates[i]])
         identity_matrix_score = torch.vstack(identity_matrix_score)
 
-        if self.args.sigmoid_rotate:
-            score = self.weight * torch.sigmoid(rotate_score) + identity_matrix_score * (1 - self.weight)
-        else:
-            score = self.weight * rotate_score + identity_matrix_score * (1 - self.weight)
+        score = self.weight * torch.sigmoid(rotate_score) + identity_matrix_score * (1 - self.weight)
         return score
 
     def IBLERotatE(self, head, relation, tail, relation_id, mode):

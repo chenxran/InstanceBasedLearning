@@ -21,6 +21,7 @@ from pykeen.utils import clamp_norm, complex_normalize
 
 import copy
 from collections import defaultdict
+import time
 
 
 def _projection_initializer(
@@ -93,7 +94,7 @@ def scoring(cls, h, r):
     return scores
 
 
-class IBLEDistMult(EntityRelationEmbeddingModel):
+class MFModel(EntityRelationEmbeddingModel):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -172,7 +173,7 @@ class IBLEDistMult(EntityRelationEmbeddingModel):
         return identity_matrix
 
 
-class IBLETransE(EntityRelationEmbeddingModel):
+class MFV3Model(EntityRelationEmbeddingModel):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -251,7 +252,7 @@ class IBLETransE(EntityRelationEmbeddingModel):
 
 
 
-class CIBLETransE(IBLETransE):
+class CIBLETransEModel(MFV3Model):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -299,7 +300,7 @@ class CIBLETransE(IBLETransE):
         scores = scoring(self, hr_batch[:, 0], hr_batch[:, 1])
         return scores + self.transe_weight * self.transe_score(hr_batch[:, 0], hr_batch[:, 1]) + self.bias
 
-class CIBLEDistMult(IBLEDistMult):
+class CIBLEDistMultModel(MFModel):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -341,7 +342,7 @@ class CIBLEDistMult(IBLEDistMult):
         scores = scoring(self, hr_batch[:, 0], hr_batch[:, 1])
         return scores + self.transe_weight * self.distmult_score(hr_batch[:, 0], hr_batch[:, 1])
 
-class IBLETransR(EntityRelationEmbeddingModel):
+class MFV2Model(EntityRelationEmbeddingModel):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=DEFAULT_EMBEDDING_HPO_EMBEDDING_DIM_RANGE,
@@ -538,7 +539,7 @@ class IBLETransR(EntityRelationEmbeddingModel):
         
         return scores
 
-class CIBLETransR(IBLETransR):
+class CIBLETransR(MFV2Model):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=DEFAULT_EMBEDDING_HPO_EMBEDDING_DIM_RANGE,
