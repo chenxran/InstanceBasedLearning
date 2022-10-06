@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 import torch
 
-from model import CIBLEDistMult, IBLEDistMult, ACTFN, IBLETransE, CIBLETransE, CIBLETransR, IBLETransR  # , MFRotatEModel, MFV4Model
+from model import MFDistMultModel, MFModel, ACTFN, MFV3Model, MFTransEModel, MFTransRModel, MFV2Model  # , MFRotatEModel, MFV4Model
 from pykeen.datasets import UMLS, get_dataset, Kinships, FB15k237, WN18RR
 from pykeen.losses import CrossEntropyLoss, MarginRankingLoss
 from pykeen.pipeline import pipeline
@@ -48,12 +48,14 @@ LOSS = {
 
 
 MODEL = {
-    'IBLEDistMult': IBLEDistMult,
-    'IBLETransR': IBLETransR,
-    "CIBLEDistMult": CIBLEDistMult,
-    "IBLETransE": IBLETransE,
-    "CIBLETransE": CIBLETransE,
-    "CIBLETransR": CIBLETransR,
+    "mf": MFModel,
+    'mf-v2': MFV2Model,
+    "mf-distmult": MFDistMultModel,
+    "mf-v3": MFV3Model,
+    "mf-transe": MFTransEModel,
+    "mf-transr": MFTransRModel,
+    # "mf-rotate": MFRotatEModel,
+    # "mf-v4": MFV4Model,
 }
 
 DATASET = {
@@ -78,8 +80,7 @@ def main(args):
         for k, v in vars(args).items():
             f.write(f'{k}: {v}\n')
 
-    if args.model in ["IBLEDistMult", "IBLETransR", "IBLETransE", "CIBLETransR", "CIBLEDistMult", "CIBLETransR"]:
-        if args.model in ["IBLEDistMult", "CIBLETransE", "IBLETransE", "CIBLEDistMult"]:
+        if args.model in ["mf", "mf-transe", "mf-v3", "mf-v4", "mf-distmult", "mf-rotate"]:
             model_kwargs = dict(
                 args=args,
                 triples_factory=dataset.training,
@@ -91,7 +92,7 @@ def main(args):
                     weight=args.reg_weight
                 ) if args.regularizer in ['lp', 'powersum'] else None,
             )
-        elif args.model in ["IBLETransR", "CIBLETransR"]:
+        elif args.model in ["mf-v2", "mf-transr"]:
             model_kwargs = dict(
                 args=args,
                 triples_factory=dataset.training,
@@ -105,11 +106,6 @@ def main(args):
                 ) if args.regularizer in ['lp', 'powersum'] else None,
             )
         model = MODEL[args.model](**model_kwargs)
-
-        # write model to file
-        with open(os.path.join(save_path, 'model.txt'), 'w') as f:
-            for n, p in model.named_parameters():
-                f.write(f'{n}: {p.size()}\n')
 
         pipeline_result = pipeline(
             dataset=dataset,
@@ -125,7 +121,7 @@ def main(args):
             stopper='early',
             stopper_kwargs=dict(
                 frequency=5, 
-                patience=3, 
+                patience=6, 
                 metric="both.realistic.inverse_harmonic_mean_rank", 
                 relative_delta=0.002, 
             ),
@@ -139,34 +135,42 @@ def main(args):
             evaluation_kwargs=dict(
                 batch_size=64,
             ),
+            # save_path=save_path,
         )
-    else:
-        pipeline_result = pipeline(
-            dataset=dataset,
-            model=args.model,
-            epochs=args.epochs,
-            random_seed=args.random_seed,
-            stopper='early',
-            stopper_kwargs=dict(
-                frequency=5, 
-                patience=3, 
-                metric="both.realistic.inverse_harmonic_mean_rank", 
-                relative_delta=0.002, 
-            ),
-            result_tracker='csv',
-            result_tracker_kwargs=dict(
-                name=f'{save_path}/result',
-            ),
-            evaluator_kwargs=dict(
-                batch_size=64,
-            ),
-            evaluation_kwargs=dict(
-                batch_size=64,
-            ),
-        )
+    # else:  # Run baseline using pipeline config from benchmark repo
+    #     pipeline_result = pipeline(
+    #         save_path=save_path,
+    #         dataset=dataset,
+    #         model=args.model,
+    #         # model_kwargs=model_kwargs,
+    #         # training_kwargs=dict(
+    #             # num_epochs=args.epochs, 
+    #             # batch_size=args.batch_size
+    #         # ),
+    #         epochs=args.epochs,
+    #         optimizer=OPTIM[args.optimizer],
+    #         optimizer_kwargs=dict(lr=args.learning_rate),
+    #         random_seed=args.random_seed,
+    #         result_tracker='wandb',
+    #         result_tracker_kwargs=dict(project='mf-kgc', entity='chenxran', config=args),
+    #         training_loop=args.training_loop,
+    #         stopper='early',
+    #         # stopper_kwargs=dict(
+    #         #     frequency=5, 
+    #         #     patience=6, 
+    #         #     metric="both.realistic.hits_at_10", 
+    #         #     relative_delta=0.002, 
+    #         # ),
+    #         evaluator_kwargs=dict(
+    #             batch_size=64,
+    #         ),
+    #         evaluation_kwargs=dict(
+    #             batch_size=64,
+    #         ),
+    #     )
 
     if args.save:
-        pipeline_result.save_to_directory(f"{save_path}/pipeline_result")
+        pipeline_result.save_to_directory(save_path)
 
 
 if __name__ == "__main__":
@@ -192,18 +196,19 @@ if __name__ == "__main__":
     parser.add_argument("--reg_weight", type=float, default=2, help="weight of regularizer loss")
     parser.add_argument("--reg_p", type=float, default=3.0, help="norm of regularizer")
     parser.add_argument("--activation", type=str, default="tanh", help="activation function")
-    parser.add_argument("--selfmask", action='store_true', help="self-masking")
+    parser.add_argument("--selfmask", type=bool, default=False, help="self-masking")
     parser.add_argument("--random_seed", type=int, default=1, help="random seed")
-    parser.add_argument("--save", action='store_true', help="Whether to save experimental result.")
+    parser.add_argument("--save", type=bool, default=False, help="Whether to save experimental result.")
 
     # argument for calculating identity matrix
-    parser.add_argument("--not_share_entity_embedding", action='store_true')
-    parser.add_argument("--not_share_relation_embedding", action='store_true')
-    parser.add_argument("--diag_w", action='store_true')
-    parser.add_argument("--w", action='store_true')
-    parser.add_argument("--normalize", action='store_true')
-    parser.add_argument("--no_identity_matrix", action='store_true')
-    parser.add_argument("--mlp", action='store_true')
+    # parser.add_argument("--interaction_type", type=int, default=0)
+    parser.add_argument("--not_share_entity_embedding", type=bool, default=False)
+    parser.add_argument("--not_share_relation_embedding", type=bool, default=False)
+    parser.add_argument("--diag_w", type=bool, default=False)
+    parser.add_argument("--w", type=bool, default=False)
+    parser.add_argument("--normalize", type=bool, default=False)
+    parser.add_argument("--no_identity_matrix", type=bool, default=False)
+    parser.add_argument("--mlp", type=bool, default=False)
     parser.add_argument("--intermediate_dim", type=int, default=None)
 
     # argument for mftranse
@@ -217,7 +222,7 @@ if __name__ == "__main__":
     if args.transe_weight != "trainable":
         args.transe_weight = float(args.transe_weight)
     
-    if args.model in ["CIBLETransR", "IBLETransR"]:
+    if args.model in ["mf-transr", "mf-v2"]:
         args.normalize = True
     
     if args.entity_embedding_dim is None:

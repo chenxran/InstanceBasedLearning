@@ -21,7 +21,6 @@ from pykeen.utils import clamp_norm, complex_normalize
 
 import copy
 from collections import defaultdict
-import time
 
 
 def _projection_initializer(
@@ -94,7 +93,7 @@ def scoring(cls, h, r):
     return scores
 
 
-class MFModel(EntityRelationEmbeddingModel):
+class MFModel(EntityRelationEmbeddingModel):  # DistMult factorization
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -153,6 +152,10 @@ class MFModel(EntityRelationEmbeddingModel):
         scores = scoring(self, hr_batch[:, 0], hr_batch[:, 1])
         return scores
 
+    # def score_h(self, rt_batch: torch.LongTensor, **kwargs) -> torch.FloatTensor:  # noqa: D102
+    #     scores = self.scoring(rt_batch[:, 1], rt_batch[:, 0])
+    #     return scores
+
     def identity_matrix(self, h, r):
         # prepare identity_matrix
         e1, e2, rel = self.mf_entity_embeddings(h), self.mf_entity_embeddings(indices=None), self.mf_relation_embeddings(r)     
@@ -173,7 +176,7 @@ class MFModel(EntityRelationEmbeddingModel):
         return identity_matrix
 
 
-class MFV3Model(EntityRelationEmbeddingModel):
+class MFV3Model(EntityRelationEmbeddingModel):  # TransE factorization
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -252,7 +255,7 @@ class MFV3Model(EntityRelationEmbeddingModel):
 
 
 
-class CIBLETransEModel(MFV3Model):
+class MFTransEModel(MFV3Model):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -300,7 +303,7 @@ class CIBLETransEModel(MFV3Model):
         scores = scoring(self, hr_batch[:, 0], hr_batch[:, 1])
         return scores + self.transe_weight * self.transe_score(hr_batch[:, 0], hr_batch[:, 1]) + self.bias
 
-class CIBLEDistMultModel(MFModel):
+class MFDistMultModel(MFModel):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=dict(type=int, low=128, high=1024, q=128),
@@ -342,7 +345,7 @@ class CIBLEDistMultModel(MFModel):
         scores = scoring(self, hr_batch[:, 0], hr_batch[:, 1])
         return scores + self.transe_weight * self.distmult_score(hr_batch[:, 0], hr_batch[:, 1])
 
-class MFV2Model(EntityRelationEmbeddingModel):
+class MFV2Model(EntityRelationEmbeddingModel):  # TransR factorization
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=DEFAULT_EMBEDDING_HPO_EMBEDDING_DIM_RANGE,
@@ -539,7 +542,7 @@ class MFV2Model(EntityRelationEmbeddingModel):
         
         return scores
 
-class CIBLETransR(MFV2Model):
+class MFTransRModel(MFV2Model):
     #: The default strategy for optimizing the model's hyper-parameters
     hpo_default: ClassVar[Mapping[str, Any]] = dict(
         embedding_dim=DEFAULT_EMBEDDING_HPO_EMBEDDING_DIM_RANGE,
@@ -590,7 +593,7 @@ class CIBLETransR(MFV2Model):
         # evaluate score function, shape: (b, e)
         return self.args.bias - linalg.vector_norm(h_bot + r - t_bot, ord=self.scoring_fct_norm, dim=-1)
 
-    def score_t(self, hr_batch: torch.LongTensor, **kwargs) -> torch.FloatTensor:
+    def score_t(self, hr_batch: torch.LongTensor, **kwargs) -> torch.FloatTensor:  # noqa: D102
         # This is used to run TransR baseline under the same hyper-parameter setting.
         if not self.args.no_identity_matrix:
             scores = self.scoring(hr_batch[:, 0], hr_batch[:, 1])

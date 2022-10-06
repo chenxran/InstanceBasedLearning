@@ -7,6 +7,7 @@ import pathlib
 from docdata import parse_docdata
 
 from ..base import PathDataset
+from ...triples import CoreTriplesFactory, TriplesFactory
 
 __all__ = [
     "KINSHIPS_TRAIN_PATH",
@@ -43,19 +44,32 @@ class Kinships(PathDataset):
         :param create_inverse_triples: Should inverse triples be created? Defaults to false.
         :param kwargs: keyword arguments passed to :class:`pykeen.datasets.base.PathDataset`.
         """
-
+        self.version = version
         if version == "default":
             KINSHIPS_TRAIN_PATH = HERE.joinpath("train.txt")
             KINSHIPS_TEST_PATH = HERE.joinpath("test.txt")
             KINSHIPS_VALIDATE_PATH = HERE.joinpath("valid.txt")
         elif version == "rnnlogic":
-            KINSHIPS_TRAIN_PATH = "data/kinship/train.txt"
-            KINSHIPS_TEST_PATH = "data/kinship/test.txt"
-            KINSHIPS_VALIDATE_PATH = "data/kinship/valid.txt"
+            KINSHIPS_TRAIN_PATH = "/data/chenxingran/RNNLogic/data/kinship/train.txt"
+            KINSHIPS_TEST_PATH = "/data/chenxingran/RNNLogic/data/kinship/test.txt"
+            KINSHIPS_VALIDATE_PATH = "/data/chenxingran/RNNLogic/data/kinship/valid.txt"
+
+            self.temp_entity_to_id = dict()
+            with open("/data/chenxingran/RNNLogic/data/kinship/entities.dict", "r") as f:
+                for line in f.readlines():
+                    id, entity = line.strip().split("\t")
+                    self.temp_entity_to_id[entity] = int(id)
+
+            self.temp_relation_to_id = dict()
+            with open("/data/chenxingran/RNNLogic/data/kinship/relations.dict", "r") as f:
+                for line in f.readlines():
+                    id, relation = line.strip().split("\t")
+                    self.temp_relation_to_id[relation] = int(id)          
+
         elif version == "neural-lp":
-            KINSHIPS_TRAIN_PATH = "data/kinship-neural-lp/train.txt"
-            KINSHIPS_TEST_PATH = "data/kinship-neural-lp/test.txt"
-            KINSHIPS_VALIDATE_PATH = "data/kinship-neural-lp/valid.txt"
+            KINSHIPS_TRAIN_PATH = "/data/chenxingran/factorization/data/kinship-neural-lp/train.txt"
+            KINSHIPS_TEST_PATH = "/data/chenxingran/factorization/data/kinship-neural-lp/test.txt"
+            KINSHIPS_VALIDATE_PATH = "/data/chenxingran/factorization/data/kinship-neural-lp/valid.txt"
         else:
             raise NotImplementedError
 
@@ -67,6 +81,23 @@ class Kinships(PathDataset):
             **kwargs,
         )
 
+    def _load(self) -> None:
+        self._training = TriplesFactory.from_path(
+            path=self.training_path,
+            create_inverse_triples=self.create_inverse_triples,
+            load_triples_kwargs=self.load_triples_kwargs,
+            entity_to_id=self.temp_entity_to_id if self.version != "default" else None,
+            relation_to_id=self.temp_relation_to_id if self.version != "default" else None,
+        )
+
+        self._testing = TriplesFactory.from_path(
+            path=self.testing_path,
+            entity_to_id=self._training.entity_to_id,  # share entity index with training
+            relation_to_id=self._training.relation_to_id,  # share relation index with training
+            # do not explicitly create inverse triples for testing; this is handled by the evaluation code
+            create_inverse_triples=False,
+            load_triples_kwargs=self.load_triples_kwargs,
+        )
 
 if __name__ == "__main__":
     Kinships().summarize()

@@ -50,37 +50,36 @@ class UMLS(PathDataset):
             UMLS_TEST_PATH = HERE.joinpath("test.txt")
             UMLS_VALIDATE_PATH = HERE.joinpath("valid.txt")
         elif version == "rnnlogic":
-            UMLS_PATH = '/data/chenxingran/CIBLE/CIBLE-v2/data/umls'
-            UMLS_TRAIN_PATH = f"{UMLS_PATH}/train.txt"
-            UMLS_TEST_PATH = f"{UMLS_PATH}/test.txt"
-            UMLS_VALIDATE_PATH = f"{UMLS_PATH}/valid.txt"
+            UMLS_TRAIN_PATH = "/data/chenxingran/RNNLogic/data/umls/train.txt"
+            UMLS_TEST_PATH = "/data/chenxingran/RNNLogic/data/umls/test.txt"
+            UMLS_VALIDATE_PATH = "/data/chenxingran/RNNLogic/data/umls/valid.txt"
             
             self.temp_entity_to_id = dict()
-            with open(f"{UMLS_PATH}/entities.dict", "r") as f:
+            with open("/data/chenxingran/RNNLogic/data/umls/entities.dict", "r") as f:
                 for line in f.readlines():
                     id, entity = line.strip().split("\t")
                     self.temp_entity_to_id[entity] = int(id)
 
             self.temp_relation_to_id = dict()
-            with open(f"{UMLS_PATH}/relations.dict", "r") as f:
+            with open("/data/chenxingran/RNNLogic/data/umls/relations.dict", "r") as f:
                 for line in f.readlines():
                     id, relation = line.strip().split("\t")
                     self.temp_relation_to_id[relation] = int(id)          
 
 
         elif version == "neural-lp":
-            UMLS_TRAIN_PATH = "data/umls-neural-lp/train.txt"
-            UMLS_TEST_PATH = "data/umls-neural-lp/test.txt"
-            UMLS_VALIDATE_PATH = "data/umls-neural-lp/valid.txt"
+            UMLS_TRAIN_PATH = "/data/chenxingran/factorization/data/umls-neural-lp/train.txt"
+            UMLS_TEST_PATH = "/data/chenxingran/factorization/data/umls-neural-lp/test.txt"
+            UMLS_VALIDATE_PATH = "/data/chenxingran/factorization/data/umls-neural-lp/valid.txt"
 
             self.temp_entity_to_id = dict()
-            with open("data/umls-neural-lp/entities.txt", "r") as f:
+            with open("/data/chenxingran/factorization/data/umls-neural-lp/entities.txt", "r") as f:
                 for id, line in enumerate(f.readlines()):
                     entity = line.strip()
                     self.temp_entity_to_id[entity] = int(id)
 
             self.temp_relation_to_id = dict()
-            with open("data/umls-neural-lp/relations.txt", "r") as f:
+            with open("/data/chenxingran/factorization/data/umls-neural-lp/relations.txt", "r") as f:
                 for id, line in enumerate(f.readlines()):
                     relation = line.strip()
                     self.temp_relation_to_id[relation] = int(id)          
