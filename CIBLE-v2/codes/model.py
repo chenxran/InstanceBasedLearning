@@ -257,7 +257,7 @@ class KGEModel(nn.Module):
         }
         
         if self.model_name in model_func:
-            if self.model_name in ['CIBLERotatE', 'CIBLE', 'CIBLErRotatE', 'IBLErRotatE']:
+            if self.model_name in ['CIBLERotatE', 'IBLERotatE', 'CIBLErRotatE', 'IBLErRotatE']:
                 score = model_func[self.model_name](head, relation, tail, relation_id, candidates, mode)
             else:
                 score = model_func[self.model_name](head, relation, tail, mode)
@@ -339,7 +339,7 @@ class KGEModel(nn.Module):
             rotate_score = self.RotatE(head, relation, tail, mode)
         
         identity_matrix_score = []
-        identity_matrix = self.IBLERotatE(head, relation, tail, relation_id, mode)
+        identity_matrix = self.IBLERotatE(head, relation, tail, relation_id, candidates, mode)
         candidates = candidates.view(batch_size, negative_sample_size)
         for i in range(batch_size):
             identity_matrix_score.append(identity_matrix[i, candidates[i]])
@@ -348,7 +348,7 @@ class KGEModel(nn.Module):
         score = self.weight * torch.sigmoid(rotate_score) + identity_matrix_score * (1 - self.weight)
         return score
 
-    def IBLERotatE(self, head, relation, tail, relation_id, mode):
+    def IBLERotatE(self, head, relation, tail, relation_id, candidates, mode):
         pi = 3.14159265358979323846
 
         mask = torch.cuda.LongTensor(relation_id.size(0), self.nentity) * 0
