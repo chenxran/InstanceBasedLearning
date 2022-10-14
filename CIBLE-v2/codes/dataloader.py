@@ -11,7 +11,6 @@ from torch.utils.data import Dataset
 
 class TrainDataset(Dataset):
     def __init__(self, triples, nentity, nrelation, negative_sample_size, mode):
-        self.len = len(triples)
         self.triples = triples
         self.triple_set = set(triples)
         self.nentity = nentity
@@ -21,87 +20,74 @@ class TrainDataset(Dataset):
         self.count = self.count_frequency(triples)
         self.true_head, self.true_tail = self.get_true_head_and_tail(self.triples)
 
-        self.head_batch_labels = dict()
-        self.tail_batch_labels = dict()
-        for h, r, t in triples:
-            if h not in self.tail_batch_labels:
-                self.tail_batch_labels[h] = dict()
-            if r not in self.tail_batch_labels[h]:
-                self.tail_batch_labels[h][r] = list()
-            self.tail_batch_labels[h][r].append(t)
+        if self.mode == 'head-batch':
+            self.inputs = list(set(torch.tensor(self.triples)[:, 1:]))
+        elif self.mode == 'tail-batch':
+            self.inputs = list(set(torch.tensor(self.triples)[:, :2]))
 
-            if t not in self.head_batch_labels:
-                self.head_batch_labels[t] = dict()
-            if r not in self.head_batch_labels[t]:
-                self.head_batch_labels[t][r] = list()
-            self.head_batch_labels[t][r].append(h)
         
     def __len__(self):
-        return self.len
+        return len(self.inputs)
     
     def __getitem__(self, idx):
         positive_sample = self.triples[idx]
-
         head, relation, tail = positive_sample
 
-        subsampling_weight = self.count[(head, relation)] + self.count[(tail, -relation-1)]
-        subsampling_weight = torch.sqrt(1 / torch.Tensor([subsampling_weight]))
+        # subsampling_weight = self.count[(head, relation)] + self.count[(tail, -relation-1)]
+        # subsampling_weight = torch.sqrt(1 / torch.Tensor([subsampling_weight]))
         
         negative_sample_list = []
         negative_sample_size = 0
 
-        while negative_sample_size < self.negative_sample_size:
-            negative_sample = np.random.randint(self.nentity, size=self.negative_sample_size*2)
-            if self.mode == 'head-batch':
-                mask = np.in1d(
-                    negative_sample, 
-                    self.true_head[(relation, tail)], 
-                    assume_unique=True, 
-                    invert=True
-                )
-            elif self.mode == 'tail-batch':
-                mask = np.in1d(
-                    negative_sample, 
-                    self.true_tail[(head, relation)], 
-                    assume_unique=True, 
-                    invert=True
-                )
-            else:
-                raise ValueError('Training batch mode %s not supported' % self.mode)
-            negative_sample = negative_sample[mask]
-            negative_sample_list.append(negative_sample)
-            negative_sample_size += negative_sample.size
+        if self.negative_sample_size == -1:
+            negative_sample = list(range(self.nentity))
+        else:
+            while negative_sample_size < self.negative_sample_size:
+                negative_sample = np.random.randint(self.nentity, size=self.negative_sample_size*2)
+                if self.mode == 'head-batch':
+                    mask = np.in1d(
+                        negative_sample,
+                        self.true_head[(relation, tail)],
+                        assume_unique=True,
+                        invert=True
+                    )
+                elif self.mode == 'tail-batch':
+                    mask = np.in1d(
+                        negative_sample,
+                        self.true_tail[(head, relation)],
+                        assume_unique=True,
+                        invert=True
+                    )
+                else:
+                    raise ValueError('Training batch mode %s not supported' % self.mode)
+                negative_sample = negative_sample[mask]
+                negative_sample_list.append(negative_sample)
+                negative_sample_size += negative_sample.size
         
-        negative_sample = np.concatenate(negative_sample_list)[:self.negative_sample_size]
+            negative_sample = np.concatenate(negative_sample_list)[:self.negative_sample_size]
 
         negative_sample = torch.LongTensor(negative_sample)
 
-        positive_sample = torch.LongTensor(positive_sample)
-        
+        positive_sample = torch.LongTensor([head, relation, tail])
+
         if self.mode == 'head-batch':
             labels = torch.zeros(self.nentity)
-            labels[torch.tensor(self.head_batch_labels[tail][relation])] = 1
+            labels[self.true_head[(relation, tail)]] = 1.0
         elif self.mode == 'tail-batch':
             labels = torch.zeros(self.nentity)
-            labels[torch.tensor(self.tail_batch_labels[head][relation])] = 1
-        return positive_sample, negative_sample, subsampling_weight, self.mode, labels
+            labels[self.true_tail[(head, relation)]] = 1.0
+        else:
+            raise ValueError('Training batch mode %s not supported' % self.mode)
+        return positive_sample, negative_sample, self.mode, labels
     
     @staticmethod
     def collate_fn(data):
         positive_sample = torch.stack([_[0] for _ in data], dim=0)
         negative_sample = torch.stack([_[1] for _ in data], dim=0)
-        subsample_weight = torch.cat([_[2] for _ in data], dim=0)
-        labels = torch.stack([_[4] for _ in data], dim=0)
-        mode = data[0][3]
-        return positive_sample, negative_sample, subsample_weight, mode, labels
-
-    @staticmethod
-    def collate_fn_ce(data):
-        positive_sample = torch.stack([_[0] for _ in data], dim=0)
-        labels = torch.stack([_[4] for _ in data], dim=0)
-        mode = data[0][3]
-        return positive_sample, labels, mode
-
+        labels = torch.stack([_[3] for _ in data], dim=0)
+        mode = data[0][2]
+        return positive_sample, negative_sample, mode, labels
+    
     @staticmethod
     def count_frequency(triples, start=4):
         '''
@@ -188,13 +174,6 @@ class TestDataset(Dataset):
         filter_bias = torch.stack([_[2] for _ in data], dim=0)
         mode = data[0][3]
         return positive_sample, negative_sample, filter_bias, mode
-
-    @staticmethod
-    def collate_fn_ce(data):
-        positive_sample = torch.stack([_[0] for _ in data], dim=0)
-        filter_bias = torch.stack([_[2] for _ in data], dim=0)
-        mode = data[0][3]
-        return positive_sample, filter_bias, mode
     
 class BidirectionalOneShotIterator(object):
     def __init__(self, dataloader_head, dataloader_tail):

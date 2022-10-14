@@ -14,8 +14,8 @@ import numpy as np
 import torch
 
 from torch.utils.data import DataLoader
-import torch.optim.lr_scheduler as lr_scheduler
-from model import KGEModel  # , KGEV2Model
+
+from model import KGEModel
 
 from dataloader import TrainDataset
 from dataloader import BidirectionalOneShotIterator
@@ -25,7 +25,7 @@ import wandb
 from datetime import datetime
 from tqdm import tqdm
 
-def set_seed(seed=42):
+def set_seed(seed=10):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
@@ -35,7 +35,6 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = False
-
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(
@@ -84,34 +83,13 @@ def parse_args(args=None):
     
     parser.add_argument('--nentity', type=int, default=0, help='DO NOT MANUALLY SET')
     parser.add_argument('--nrelation', type=int, default=0, help='DO NOT MANUALLY SET')
+    parser.add_argument('--ible_weight', default=0.0, type=float)
+    parser.add_argument('--pretrained', action='store_true')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
+    parser.add_argument('--mlp', action='store_true')
+    parser.add_argument('--relation_aware', action='store_true')
 
-    parser.add_argument('--freeze_entity_embedding', action='store_true', help='pretrained weight of model')
-    parser.add_argument('--freeze_relation_embedding', action='store_true', help='pretrained weight of model')
-    parser.add_argument('--pretrained', default=None, help='whether to used pretrained weight of model')
-    parser.add_argument('--pretrained_path', type=str, default=None, help='pretrained weight of model')
-
-    # hyper-parameter for CIBLE-RotatE
-    parser.add_argument('--weight', type=float, default=1.0, help='weight')
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='gradient_accumulation_steps')
-    parser.add_argument('--activation', type=str, default='none', help='activation function')
-    parser.add_argument('--normalize', action='store_true', help='normalize')
-    parser.add_argument('--temperature', type=float, default=1.0, help='temperature of score')
-    parser.add_argument('--mlp', type=str, default="False", help='whether to use mlp')
-    parser.add_argument('--intermediate_dim', type=int, default=None, help='temperature of score')    
-    parser.add_argument('--r_type', type=str, default='diag')
-    parser.add_argument('--im_cal', type=str, default='rotate')
-    parser.add_argument('--method', type=str, default="default", help='negative sampling or global crossentropy')
-    parser.add_argument('--pooling', type=str, default='sum')
-
-    parser.add_argument('--training_epochs', type=int, default=None)
-    parser.add_argument('--evaluate_strategy', type=str, default='steps')
-    parser.add_argument('--margin', type=bool, default=False)
-
-    args = parser.parse_args(args)
-
-    args.mlp = True if args.mlp.lower() == "true" else False
-
-    return args
+    return parser.parse_args(args)
 
 def override_config(args):
     '''
@@ -121,7 +99,7 @@ def override_config(args):
     with open(os.path.join(args.init_checkpoint, 'config.json'), 'r') as fjson:
         argparse_dict = json.load(fjson)
     
-    # args.countries = argparse_dict['countries']
+    args.countries = argparse_dict['countries']
     if args.data_path is None:
         args.data_path = argparse_dict['data_path']
     args.model = argparse_dict['model']
@@ -196,6 +174,7 @@ def set_logger(args):
     wandb.init(project='cible', entity='chenxran', config=args)
     wandb.run.log_code('.')
 
+
 def log_metrics(mode, step, metrics):
     '''
     Print the evaluation logs
@@ -207,13 +186,6 @@ def log_metrics(mode, step, metrics):
         
 def main(args):
     set_seed()
-    # args.__dict__.update(json.load(open(os.path.join(args.pretrained_path, 'config.json'))))
-    # args.save_path = "/data/chenxingran/CIBLE/CIBLE-v2/models"
-    # args.data_path = "/data/chenxingran/CIBLE/CIBLE-v2/data/umls"
-    # args.im_cal = 'rotate'
-    # args.pooling = 'mean'
-    # args.sigmoid_rotate = True
-
     if (not args.do_train) and (not args.do_valid) and (not args.do_test):
         raise ValueError('one of train/val/test mode must be choosed.')
     
@@ -278,57 +250,25 @@ def main(args):
     all_true_triples = train_triples + valid_triples + test_triples
     
     kge_model = KGEModel(
-        args=args,
         model_name=args.model,
         nentity=nentity,
         nrelation=nrelation,
         hidden_dim=args.hidden_dim,
         gamma=args.gamma,
-        weight=args.weight,
-        activation=args.activation,
         double_entity_embedding=args.double_entity_embedding,
         double_relation_embedding=args.double_relation_embedding,
         train_triples=train_triples,
+        ible_weight=args.ible_weight,
+        mlp=args.mlp,
+        relation_aware=args.relation_aware,
     )
-    # elif args.method == "crossentropy":
-    #     kge_model = KGEV2Model(
-    #         args=args,
-    #         model_name=args.model,
-    #         nentity=nentity,
-    #         nrelation=nrelation,
-    #         hidden_dim=args.hidden_dim,
-    #         gamma=args.gamma,
-    #         weight=args.weight,
-    #         activation=args.activation,
-    #         double_entity_embedding=args.double_entity_embedding,
-    #         double_relation_embedding=args.double_relation_embedding,
-    #         train_triples=train_triples,
-    #     )  
+    
     logging.info('Model Parameter Configuration:')
     for name, param in kge_model.named_parameters():
         logging.info('Parameter %s: %s, require_grad = %s' % (name, str(param.size()), str(param.requires_grad)))
 
     if args.cuda:
         kge_model = kge_model.cuda()
-
-    if args.pretrained:
-        path = os.path.join(args.data_path, f'RotatE_{args.hidden_dim}')
-        if not os.path.exists(path):
-            raise ValueError(f'Pretrained checkpoint of proposed dimension {args.hidden_dim} does not exist!')
-
-        kge_model.entity_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'entity_embedding.npy'))).cuda()
-        kge_model.relation_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'relation_embedding.npy'))).cuda()      
-        logging.info("Loaded pretrained model from %s" % path)
-
-    if args.pretrained_path is not None:
-        kge_model.entity_embedding.data = torch.from_numpy(np.load(os.path.join(args.pretrained_path, 'entity_embedding.npy'))).cuda()
-        kge_model.relation_embedding.data = torch.from_numpy(np.load(os.path.join(args.pretrained_path, 'relation_embedding.npy'))).cuda()
-
-        model_state_dict = torch.load(os.path.join(args.pretrained_path, 'checkpoint'))
-        if 'head_m_r' in model_state_dict['model_state_dict']:
-            kge_model.head_m_r.data = model_state_dict['model_state_dict']['head_m_r']
-            kge_model.tail_m_r.data = model_state_dict['model_state_dict']['tail_m_r']
-        logging.info("Loaded pretrained model from %s" % args.pretrained_path)
 
     if args.do_train:
         # Set training dataloader iterator
@@ -337,7 +277,7 @@ def main(args):
             batch_size=args.batch_size,
             shuffle=True, 
             num_workers=max(1, args.cpu_num//2),
-            collate_fn=TrainDataset.collate_fn   # if args.method == "default" else TrainDataset.collate_fn_ce,
+            collate_fn=TrainDataset.collate_fn
         )
         
         train_dataloader_tail = DataLoader(
@@ -345,7 +285,7 @@ def main(args):
             batch_size=args.batch_size,
             shuffle=True, 
             num_workers=max(1, args.cpu_num//2),
-            collate_fn=TrainDataset.collate_fn   # if args.method == "default" else TrainDataset.collate_fn_ce,
+            collate_fn=TrainDataset.collate_fn
         )
         
         train_iterator = BidirectionalOneShotIterator(train_dataloader_head, train_dataloader_tail)
@@ -356,12 +296,6 @@ def main(args):
             filter(lambda p: p.requires_grad, kge_model.parameters()), 
             lr=current_learning_rate
         )
-
-        if args.training_epochs is not None:
-            args.max_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * args.training_epochs
-        if args.evaluate_strategy == "epochs":
-            args.valid_steps = (len(train_dataloader_head) + len(train_dataloader_tail)) * 5
-
         if args.warm_up_steps:
             warm_up_steps = args.warm_up_steps
         else:
@@ -384,6 +318,15 @@ def main(args):
         logging.info('Ramdomly Initializing %s Model...' % args.model)
         init_step = 0
     
+    if args.pretrained:
+        path = os.path.join(args.data_path, f'RotatE_{args.hidden_dim}')
+        if not os.path.exists(path):
+            raise ValueError(f'Pretrained checkpoint of proposed dimension {args.hidden_dim} does not exist!')
+
+        kge_model.entity_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'entity_embedding.npy'))).cuda()
+        kge_model.relation_embedding.data = torch.from_numpy(np.load(os.path.join(path, 'relation_embedding.npy'))).cuda()
+        logging.info("Loaded pretrained model from %s" % path)
+    
     step = init_step
     best_valid_metrics = {}
     best_test_metrics = {}
@@ -401,12 +344,10 @@ def main(args):
         logging.info('adversarial_temperature = %f' % args.adversarial_temperature)
     
     # Set valid dataloader as it would be evaluated during training
-    train_step = kge_model.train_step
-    test_step = kge_model.test_step
 
     if args.do_valid:
         logging.info('Evaluating on Test Dataset...')
-        metrics = test_step(kge_model, test_triples, all_true_triples, args)
+        metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
         log_metrics('Test', step, metrics)
         for k, v in metrics.items():
             if k not in best_test_metrics:
@@ -428,7 +369,7 @@ def main(args):
         #Training Loop
         for step in tqdm(range(init_step, args.max_steps)):
             
-            log = train_step(kge_model, optimizer, train_iterator, args)
+            log = kge_model.train_step(kge_model, optimizer, train_iterator, args)
             
             training_logs.append(log)
             
@@ -450,38 +391,26 @@ def main(args):
                 save_model(kge_model, optimizer, save_variable_list, args)
                 
             if step % args.log_steps == 0:
-                metrics = {}
                 metrics = {'gnorm': grad_norm(kge_model), 'pnorm': param_norm(kge_model)}
                 for metric in training_logs[0].keys():
                     metrics[metric] = sum([log[metric] for log in training_logs])/len(training_logs)
                 log_metrics('Training average', step, metrics)
                 training_logs = []
                 
-            if args.do_valid and step % args.valid_steps == 0 and step != 0:
-                # we temporary comment these lines to accelerate the training.
-                # logging.info('Evaluating on Valid Dataset...')
-                # metrics = test_step(kge_model, valid_triples, all_true_triples, args)
-                # log_metrics('Valid', step, metrics)
-                # for k, v in metrics.items():
-                #     if k not in best_valid_metrics:
-                #         best_valid_metrics[k] = v
-                #     else:
-                #         if k == "MR":
-                #             if best_valid_metrics[k] > v:
-                #                 best_valid_metrics[k] = v
-                #         else:
-                #             if best_valid_metrics[k] < v:
-                #                 best_valid_metrics[k] = v
-                # log_metrics('Best-Valid', step, best_valid_metrics)
+            # if args.do_valid and step % args.valid_steps == 0 and step != 0:
+            #     logging.info('Evaluating on Valid Dataset...')
+            #     metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+            #     log_metrics('Valid', step, metrics)
 
+            if args.do_test and step % args.valid_steps == 0 and step != 0:
                 logging.info('Evaluating on Test Dataset...')
-                metrics = test_step(kge_model, test_triples, all_true_triples, args)
+                metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
                 log_metrics('Test', step, metrics)
                 for k, v in metrics.items():
                     if k not in best_test_metrics:
                         best_test_metrics[k] = v
                     else:
-                        if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+                        if k == "MR":
                             if best_test_metrics[k] > v:
                                 best_test_metrics[k] = v
                         else:
@@ -496,43 +425,21 @@ def main(args):
         }
         save_model(kge_model, optimizer, save_variable_list, args)
         
-    # we temporary comment these lines to accelerate the training.
-    # if args.do_valid:
-        # logging.info('Evaluating on Valid Dataset...')
-        # metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-        # log_metrics('Valid', step, metrics)
-        # for k, v in metrics.items():
-        #     if k not in best_valid_metrics:
-        #         best_valid_metrics[k] = v
-        #     else:
-        #         if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-        #             if best_valid_metrics[k] > v:
-        #                 best_valid_metrics[k] = v
-        #         else:
-        #             if best_valid_metrics[k] < v:
-        #                 best_valid_metrics[k] = v
-        # log_metrics('Best-Valid', step, best_valid_metrics)
+    if args.do_valid:
+        logging.info('Evaluating on Valid Dataset...')
+        metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+        log_metrics('Valid', step, metrics)
 
     if args.do_test:
         logging.info('Evaluating on Test Dataset...')
         metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
         log_metrics('Test', step, metrics)
-        for k, v in metrics.items():
-            if k not in best_test_metrics:
-                best_test_metrics[k] = v
-            else:
-                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-                    if best_test_metrics[k] > v:
-                        best_test_metrics[k] = v
-                else:
-                    if best_test_metrics[k] < v:
-                        best_test_metrics[k] = v
-        log_metrics('Best-Test', step, best_test_metrics)
 
-    if args.evaluate_train:
-        logging.info('Evaluating on Training Dataset...')
-        metrics = kge_model.test_step(kge_model, train_triples, all_true_triples, args)
-        log_metrics('Test', step, metrics)
+    # if args.evaluate_train:
+    #     logging.info('Evaluating on Training Dataset...')
+    #     metrics = kge_model.test_step(kge_model, train_triples, all_true_triples, args)
+    #     log_metrics('Test', step, metrics)
         
 if __name__ == '__main__':
-    main(parse_args())
+    args = parse_args()
+    main(args)
