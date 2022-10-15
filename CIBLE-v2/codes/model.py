@@ -26,9 +26,10 @@ import torch.nn.functional as F
 torch.autograd.set_detect_anomaly(True)
 
 
-class IBLE(MessagePassing):
-    def __init__(self, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
-        super().__init__(aggr='add')
+class IBLE(nn.Module):
+    def __init__(self, args, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
+        super().__init__()
+        self.config = args
         self.use_mlp = mlp
         self.relation_aware = relation_aware
         self.m = len(edges)
@@ -56,6 +57,9 @@ class IBLE(MessagePassing):
         self.edge_node1 = torch.LongTensor(self.edge_node1).permute(1, 0).cuda()
         self.node_edge2 = torch.LongTensor(self.node_edge2).permute(1, 0).cuda()
         self.edge_node2 = torch.LongTensor(self.edge_node2).permute(1, 0).cuda()
+
+        self.aggregator1 = MessagePassing(aggr='add')
+        self.aggregator2 = MessagePassing(aggr=self.config.pooling)
 
         if self.use_mlp:
             self.mlp = nn.Sequential(
@@ -98,11 +102,15 @@ class IBLE(MessagePassing):
                 rel = self.head_r[relation_ids]
             else:
                 rel = self.tail_r[relation_ids]
+            # re, im = torch.chunk(emb.unsqueeze(0) - all_emb.unsqueeze(1), 2, dim=2)
             emb = (emb * rel).unsqueeze(0)
             all_emb = all_emb.unsqueeze(1) * rel.unsqueeze(0)
-            dis = (emb - all_emb).norm(p=1, dim=-1)
+            # dis = (emb - all_emb).norm(p=1, dim=-1)
+            re, im = torch.chunk(emb - all_emb, 2, dim=2)
+            dis = torch.stack([re, im], dim=0).norm(p=2, dim = 0).sum(dim=2)
         else:
-            dis = (emb.unsqueeze(0) - all_emb.unsqueeze(1)).norm(p=1, dim=-1)
+            re, im = torch.chunk(emb.unsqueeze(0) - all_emb.unsqueeze(1), 2, dim=2)
+            dis = torch.stack([re, im], dim=0).norm(p=2, dim = 0).sum(dim=2)
 
         if source_idx is not None:
             self_mask = torch.ones(self.n, bs).bool().cuda()
@@ -110,18 +118,19 @@ class IBLE(MessagePassing):
             dis = torch.where(self_mask,dis,torch.tensor(1e8).cuda())
         dis = torch.sigmoid(self.gamma-dis)
 
-        edge_score = self.propagate(node_edge,x=dis, size = (self.n,self.m)) #m * bs
+        edge_score = self.aggregator1.propagate(node_edge,x=dis, size = (self.n,self.m)) #m * bs
         edge_score *= torch.index_select(self.r_mask, dim=0, index=relation_ids).permute(1,0) #m*bs
-        taget_score = self.propagate(edge_node,x = edge_score, size = (self.m,self.n) ).permute(1,0) #bs * n
+        taget_score = self.aggregator2.propagate(edge_node,x = edge_score, size = (self.m,self.n) ).permute(1,0) #bs * n
         #taget_score /= edge_degree
         if self.use_mlp:
             taget_score = self.mlp(taget_score)
         return taget_score
 
 class KGEModel(nn.Module):
-    def __init__(self, model_name, nentity, nrelation, hidden_dim, gamma, mlp=False, relation_aware=False,
+    def __init__(self, args, model_name, nentity, nrelation, hidden_dim, gamma, mlp=False, relation_aware=False,
                  double_entity_embedding=False, double_relation_embedding=False, train_triples = None, ible_weight = 0.0):
         super(KGEModel, self).__init__()
+        self.config = args
         self.model_name = model_name
         self.nentity = nentity
         self.nrelation = nrelation
@@ -129,7 +138,7 @@ class KGEModel(nn.Module):
         self.epsilon = 2.0
         self.ible_weight = ible_weight
         if ible_weight!= 0.0:
-            self.ible = IBLE(train_triples, nrelation, nentity, gamma, epsilon=2.0, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
+            self.ible = IBLE(args, train_triples, nrelation, nentity, gamma, epsilon=2.0, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
 
         self.gamma = nn.Parameter(
             torch.Tensor([gamma]), 
@@ -361,31 +370,87 @@ class KGEModel(nn.Module):
         optimizer.zero_grad()
 
         for _ in range(args.gradient_accumulation_steps):
-            positive_sample, negative_sample, mode, labels = next(train_iterator)
+            positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)
 
             if args.cuda:
                 positive_sample = positive_sample.cuda()
                 negative_sample = negative_sample.cuda()
+                subsampling_weight = subsampling_weight.cuda()
 
-            negative_score = model((positive_sample, negative_sample), mode=mode)
-            if model.ible_weight != 0.0:
-                if mode == 'head-batch':
-                    source_idx = positive_sample[:,2]
+            if model.config.negative_sample_size == -1:
+                negative_score = model((positive_sample, negative_sample), mode=mode)
+                if model.ible_weight != 0.0:
+                    if mode == 'head-batch':
+                        source_idx = positive_sample[:,2]
+                    else:
+                        source_idx = positive_sample[:,0]
+                    emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
+                    emb_all = model.entity_embedding
+                    ible_score = model.ible(emb_batch,emb_all,source_idx,positive_sample[:,1],mode)
+                    negative_score = model.merge_score(negative_score,ible_score)
                 else:
-                    source_idx = positive_sample[:,0]
-                emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
-                emb_all = model.entity_embedding
-                ible_score = model.ible(emb_batch,emb_all,source_idx,positive_sample[:,1],mode)
-                negative_score = model.merge_score(negative_score,ible_score)
-            else:
-                negative_score = torch.sigmoid(negative_score)
+                    negative_score = torch.sigmoid(negative_score)
 
-            if mode == 'head-batch':
-                labels = positive_sample[:,0]
+                if mode == 'head-batch':
+                    labels = positive_sample[:,0]
+                else:
+                    labels = positive_sample[:,2]
+                loss_fn = nn.CrossEntropyLoss(reduction='mean')
+                loss = loss_fn(negative_score, labels)
             else:
-                labels = positive_sample[:,2]
-            loss_fn = nn.CrossEntropyLoss(reduction='mean')
-            loss = loss_fn(negative_score, labels)
+                negative_score = model((positive_sample, negative_sample), mode=mode)
+                positive_score = model(positive_sample)
+
+                if model.ible_weight != 0.0:
+                    if mode == 'head-batch':
+                        source_idx = positive_sample[:,2]
+                    else:
+                        source_idx = positive_sample[:,0]
+                    emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
+                    emb_all = model.entity_embedding
+                    ible_score = model.ible(emb_batch, emb_all, source_idx, positive_sample[:,1], mode)
+                    
+                    if mode == 'head-batch':
+                        positive_ible_score = ible_score[torch.arange(positive_sample.shape[0]), positive_sample[:,0]]
+                    else:
+                        positive_ible_score = ible_score[torch.arange(positive_sample.shape[0]), positive_sample[:,2]]
+                    positive_score = model.merge_score(positive_score, positive_ible_score.unsqueeze(1))
+                    
+                    negative_ible_score = torch.vstack([ible_score[i, negative_sample[i]] for i in range(negative_sample.shape[0])])
+                    negative_score = model.merge_score(negative_score, negative_ible_score)
+
+                if model.config.loss == 'crossentropy':
+                    scores = torch.cat([positive_score, negative_score], dim=1)
+                    labels = torch.zeros(scores.size(0), device=scores.device).long()
+
+                    loss = F.cross_entropy(scores, target=labels)
+
+                elif model.config.loss == 'margin':
+                    if args.negative_adversarial_sampling:
+                        #In self-adversarial sampling, we do not apply back-propagation on the sampling weight
+                        negative_score = (F.softmax(negative_score * args.adversarial_temperature, dim = 1).detach() 
+                                        * F.logsigmoid(-negative_score)).sum(dim = 1)
+                    else:
+                        negative_score = F.logsigmoid(-negative_score).mean(dim = 1)
+
+                    positive_score = model(positive_sample)
+                    positive_score = F.logsigmoid(positive_score).squeeze(dim = 1)
+
+                    if args.uni_weight:
+                        positive_sample_loss = - positive_score.mean()
+                        negative_sample_loss = - negative_score.mean()
+                    else:
+                        positive_sample_loss = - (subsampling_weight * positive_score).sum()/subsampling_weight.sum()
+                        negative_sample_loss = - (subsampling_weight * negative_score).sum()/subsampling_weight.sum()
+
+                    loss = (positive_sample_loss + negative_sample_loss) / 2
+
+
+                    # positive_sample_loss = - positive_score.mean()
+                    # negative_sample_loss = negative_score.mean()
+
+                    # loss = (positive_sample_loss + negative_sample_loss) / 2
+
             #loss = loss_fn(negative_score, labels)
 
             if args.regularization != 0.0:
@@ -405,8 +470,8 @@ class KGEModel(nn.Module):
 
         log = {
             **regularization_log,
-            #'positive_sample_loss': positive_sample_loss.item(),
-            #'negative_sample_loss': negative_sample_loss.item(),
+            # 'positive_sample_loss': positive_sample_loss.item(),
+            # 'negative_sample_loss': negative_sample_loss.item(),
             'loss': loss.item()
         }
 

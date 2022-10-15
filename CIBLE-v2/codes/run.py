@@ -88,6 +88,8 @@ def parse_args(args=None):
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
     parser.add_argument('--mlp', action='store_true')
     parser.add_argument('--relation_aware', action='store_true')
+    parser.add_argument('--pooling', default='mean', type=str)
+    parser.add_argument('--loss', default='crossentropy', type=str)
 
     return parser.parse_args(args)
 
@@ -250,6 +252,7 @@ def main(args):
     all_true_triples = train_triples + valid_triples + test_triples
     
     kge_model = KGEModel(
+        args=args,
         model_name=args.model,
         nentity=nentity,
         nrelation=nrelation,
@@ -345,21 +348,21 @@ def main(args):
     
     # Set valid dataloader as it would be evaluated during training
 
-    if args.do_valid:
-        logging.info('Evaluating on Test Dataset...')
-        metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
-        log_metrics('Test', step, metrics)
-        for k, v in metrics.items():
-            if k not in best_test_metrics:
-                best_test_metrics[k] = v
-            else:
-                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-                    if best_test_metrics[k] > v:
-                        best_test_metrics[k] = v
-                else:
-                    if best_test_metrics[k] < v:
-                        best_test_metrics[k] = v
-        log_metrics('Best-Test', step, best_test_metrics)
+    # if args.do_valid:
+    #     logging.info('Evaluating on Test Dataset...')
+    #     metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
+    #     log_metrics('Test', step, metrics)
+    #     for k, v in metrics.items():
+    #         if k not in best_test_metrics:
+    #             best_test_metrics[k] = v
+    #         else:
+    #             if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+    #                 if best_test_metrics[k] > v:
+    #                     best_test_metrics[k] = v
+    #             else:
+    #                 if best_test_metrics[k] < v:
+    #                     best_test_metrics[k] = v
+    #     log_metrics('Best-Test', step, best_test_metrics)
     
     if args.do_train:
         logging.info('learning_rate = %d' % current_learning_rate)
