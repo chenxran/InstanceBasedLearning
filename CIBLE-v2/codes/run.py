@@ -86,10 +86,13 @@ def parse_args(args=None):
     parser.add_argument('--ible_weight', default=0.0, type=float)
     parser.add_argument('--pretrained', action='store_true')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
-    parser.add_argument('--mlp', action='store_true')
-    parser.add_argument('--relation_aware', action='store_true')
+    parser.add_argument('--mlp', default=False, type=bool)
+    parser.add_argument('--relation_aware', default=False, type=bool)
     parser.add_argument('--pooling', default='mean', type=str)
     parser.add_argument('--loss', default='crossentropy', type=str)
+    parser.add_argument('--cosine', default=False, type=bool)
+    parser.add_argument('--seed', default=10, type=int)
+    parser.add_argument('--activation', default=None, type=str)
 
     return parser.parse_args(args)
 
@@ -187,7 +190,7 @@ def log_metrics(mode, step, metrics):
 
         
 def main(args):
-    set_seed()
+    set_seed(args.seed)
     if (not args.do_train) and (not args.do_valid) and (not args.do_test):
         raise ValueError('one of train/val/test mode must be choosed.')
     

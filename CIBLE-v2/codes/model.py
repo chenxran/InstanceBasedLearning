@@ -26,6 +26,10 @@ import torch.nn.functional as F
 torch.autograd.set_detect_anomaly(True)
 
 
+ACTFN = {
+    'none': lambda x: x,
+    'tanh': torch.tanh,
+}
 class IBLE(nn.Module):
     def __init__(self, args, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
         super().__init__()
@@ -63,10 +67,10 @@ class IBLE(nn.Module):
 
         if self.use_mlp:
             self.mlp = nn.Sequential(
-                nn.Linear(self.n, self.n * 2),
+                nn.Linear(self.n, 512),
                 nn.Tanh(),
                 nn.Dropout(p=0.1),
-                nn.Linear(self.n * 2, self.n),
+                nn.Linear(512, self.n),
             )
         
         if self.relation_aware:
@@ -106,17 +110,23 @@ class IBLE(nn.Module):
             emb = (emb * rel).unsqueeze(0)
             all_emb = all_emb.unsqueeze(1) * rel.unsqueeze(0)
             # dis = (emb - all_emb).norm(p=1, dim=-1)
-            re, im = torch.chunk(emb - all_emb, 2, dim=2)
-            dis = torch.stack([re, im], dim=0).norm(p=2, dim = 0).sum(dim=2)
         else:
-            re, im = torch.chunk(emb.unsqueeze(0) - all_emb.unsqueeze(1), 2, dim=2)
-            dis = torch.stack([re, im], dim=0).norm(p=2, dim = 0).sum(dim=2)
+            emb = emb.unsqueeze(0)
+            all_emb = all_emb.unsqueeze(1)
 
-        if source_idx is not None:
-            self_mask = torch.ones(self.n, bs).bool().cuda()
-            self_mask[source_idx, torch.arange(bs)] = False
-            dis = torch.where(self_mask,dis,torch.tensor(1e8).cuda())
-        dis = torch.sigmoid(self.gamma-dis)
+        if self.config.cosine:
+            if self.relation_aware:
+                dis = ACTFN[self.config.activation](torch.bmm(all_emb.permute(1, 0, 2).contiguous(), emb.permute(1, 2, 0).contiguous()).squeeze(2).t())
+            else:
+                dis = ACTFN[self.config.activation](torch.matmul(all_emb, emb.permute(0, 2, 1).contiguous()).squeeze(1))
+        else:
+            dis = (emb - all_emb).norm(p=1, dim=-1)
+
+            if source_idx is not None:
+                self_mask = torch.ones(self.n, bs).bool().cuda()
+                self_mask[source_idx, torch.arange(bs)] = False
+                dis = torch.where(self_mask,dis,torch.tensor(1e8).cuda())
+            dis = torch.sigmoid(self.gamma-dis)
 
         edge_score = self.aggregator1.propagate(node_edge,x=dis, size = (self.n,self.m)) #m * bs
         edge_score *= torch.index_select(self.r_mask, dim=0, index=relation_ids).permute(1,0) #m*bs
@@ -433,7 +443,6 @@ class KGEModel(nn.Module):
                     else:
                         negative_score = F.logsigmoid(-negative_score).mean(dim = 1)
 
-                    positive_score = model(positive_sample)
                     positive_score = F.logsigmoid(positive_score).squeeze(dim = 1)
 
                     if args.uni_weight:
