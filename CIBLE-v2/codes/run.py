@@ -25,7 +25,7 @@ import wandb
 from datetime import datetime
 from tqdm import tqdm
 
-def set_seed(seed=10):
+def set_seed(seed=42):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
@@ -87,14 +87,19 @@ def parse_args(args=None):
     parser.add_argument('--pretrained', action='store_true')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
     parser.add_argument('--mlp', default=False, type=bool)
-    parser.add_argument('--relation_aware', default=False, type=bool)
+    parser.add_argument('--relation_aware', default=None, type=str)
     parser.add_argument('--pooling', default='mean', type=str)
     parser.add_argument('--loss', default='crossentropy', type=str)
     parser.add_argument('--cosine', default=False, type=bool)
-    parser.add_argument('--seed', default=10, type=int)
-    parser.add_argument('--activation', default=None, type=str)
+    parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument('--activation', default='none', type=str)
 
-    return parser.parse_args(args)
+    args = parser.parse_args(args)
+
+    if args.relation_aware == 'none':
+        args.relation_aware = None
+    
+    return args
 
 def override_config(args):
     '''
@@ -302,10 +307,13 @@ def main(args):
             filter(lambda p: p.requires_grad, kge_model.parameters()), 
             lr=current_learning_rate
         )
+        # create scheduler
         if args.warm_up_steps:
             warm_up_steps = args.warm_up_steps
+            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.95)
         else:
             warm_up_steps = args.max_steps // 2
+            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.1)
         
         param_norm = lambda m: math.sqrt(sum([p.norm().item() ** 2 for p in m.parameters()]))
         grad_norm = lambda m: math.sqrt(sum([p.grad.norm().item() ** 2 for p in m.parameters() if p.grad is not None]))
@@ -374,25 +382,17 @@ def main(args):
         
         #Training Loop
         for step in tqdm(range(init_step, args.max_steps)):
-            
             log = kge_model.train_step(kge_model, optimizer, train_iterator, args)
-            
+
             training_logs.append(log)
             
-            if step >= warm_up_steps:
-                current_learning_rate = current_learning_rate / 10
-                logging.info('Change learning_rate to %f at step %d' % (current_learning_rate, step))
-                optimizer = torch.optim.AdamW(
-                    filter(lambda p: p.requires_grad, kge_model.parameters()), 
-                    lr=current_learning_rate
-                )
-                warm_up_steps = warm_up_steps * 3
+            if step % warm_up_steps == 0 and step != 0:
+                lr_scheduler.step()
             
             if step % args.save_checkpoint_steps == 0:
                 save_variable_list = {
                     'step': step, 
                     'current_learning_rate': current_learning_rate,
-                    'warm_up_steps': warm_up_steps
                 }
                 save_model(kge_model, optimizer, save_variable_list, args)
                 

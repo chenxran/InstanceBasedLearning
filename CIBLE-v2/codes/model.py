@@ -30,6 +30,8 @@ ACTFN = {
     'none': lambda x: x,
     'tanh': torch.tanh,
 }
+
+
 class IBLE(nn.Module):
     def __init__(self, args, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
         super().__init__()
@@ -40,7 +42,8 @@ class IBLE(nn.Module):
         self.n = nentity
         self.node_edge1 = []
         self.edge_node1 = []
-        self.r_mask = torch.zeros(nrelation,self.m).cuda()
+        self.r_mask1 = torch.zeros(nrelation, self.m).cuda()
+        self.r_mask2 = torch.zeros(nrelation, self.m).cuda()
         self.node_edge2 = []
         self.edge_node2 = []
         self.gamma = gamma
@@ -53,7 +56,9 @@ class IBLE(nn.Module):
         for i, (h,r,t) in enumerate(edges):
             self.node_edge1.append([h, i])
             self.edge_node1.append([i, t])
-            self.r_mask[r][i] = 1
+            self.r_mask1[r][i] = 1
+            self.r_mask2[r][i] = 1
+
             self.node_edge2.append([t, i])
             self.edge_node2.append([i, h])
 
@@ -67,58 +72,66 @@ class IBLE(nn.Module):
 
         if self.use_mlp:
             self.mlp = nn.Sequential(
-                nn.Linear(self.n, 512),
+                nn.Linear(self.n, min(2 * self.n, 512)),
                 nn.Tanh(),
                 nn.Dropout(p=0.1),
-                nn.Linear(512, self.n),
-            )
-        
-        if self.relation_aware:
-            self.embedding_range = nn.Parameter(
-                torch.Tensor([(self.gamma + epsilon) / entity_dim]), 
-                requires_grad=False
+                nn.Linear(min(2 * self.n, 512), self.n),
             )
 
-            self.head_r = nn.Parameter(torch.randn(nrelation, 2 * entity_dim))
-            nn.init.uniform_(
-                tensor=self.head_r, 
-                a=-self.embedding_range.item(),  
-                b=self.embedding_range.item()
-            )
-            self.tail_r = nn.Parameter(torch.randn(nrelation, 2 * entity_dim))
-            nn.init.uniform_(
-                tensor=self.tail_r, 
-                a=-self.embedding_range.item(),  
-                b=self.embedding_range.item()
-            )
+        hidden_dim = entity_dim * 2 if self.config.double_entity_embedding else entity_dim
+        if self.relation_aware == 'diag':
+            self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.head_r, -bound, bound)
+
+            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.tail_r, -bound, bound)
+        elif self.relation_aware == 'matrix':
+            self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.head_r, -bound, bound)
+
+            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.tail_r, -bound, bound)
 
     def forward(self, emb, all_emb, source_idx, relation_ids, mode): # bs * dim, nentity * dim
         bs = emb.size(0)
         if mode == 'head-batch':
             node_edge = self.node_edge2
             edge_node = self.edge_node2
+            r_mask = self.r_mask2
         else:
             node_edge = self.node_edge1
             edge_node = self.edge_node1
+            r_mask = self.r_mask1
 
-        if self.relation_aware:
+        if self.relation_aware == 'diag':
             if mode == 'head-batch':
                 rel = self.head_r[relation_ids]
             else:
                 rel = self.tail_r[relation_ids]
-            # re, im = torch.chunk(emb.unsqueeze(0) - all_emb.unsqueeze(1), 2, dim=2)
             emb = (emb * rel).unsqueeze(0)
             all_emb = all_emb.unsqueeze(1) * rel.unsqueeze(0)
-            # dis = (emb - all_emb).norm(p=1, dim=-1)
-        else:
+        elif self.relation_aware == 'matrix':
+            if mode == 'head-batch':
+                rel = self.head_r[relation_ids]
+            else:
+                rel = self.tail_r[relation_ids]
+            emb = torch.bmm(emb.unsqueeze(1), rel)
+            all_emb = torch.bmm(all_emb.repeat(bs, 1, 1), rel)
+        elif self.relation_aware is None:
             emb = emb.unsqueeze(0)
             all_emb = all_emb.unsqueeze(1)
 
         if self.config.cosine:
-            if self.relation_aware:
+            if self.relation_aware == 'diag':
                 dis = ACTFN[self.config.activation](torch.bmm(all_emb.permute(1, 0, 2).contiguous(), emb.permute(1, 2, 0).contiguous()).squeeze(2).t())
-            else:
+            elif self.relation_aware is None:
                 dis = ACTFN[self.config.activation](torch.matmul(all_emb, emb.permute(0, 2, 1).contiguous()).squeeze(1))
+            elif self.relation_aware == 'matrix':
+                dis = ACTFN[self.config.activation](torch.matmul(all_emb, emb.permute(0, 2, 1).contiguous()).squeeze(2).t())
         else:
             dis = (emb - all_emb).norm(p=1, dim=-1)
 
@@ -129,12 +142,12 @@ class IBLE(nn.Module):
             dis = torch.sigmoid(self.gamma-dis)
 
         edge_score = self.aggregator1.propagate(node_edge,x=dis, size = (self.n,self.m)) #m * bs
-        edge_score *= torch.index_select(self.r_mask, dim=0, index=relation_ids).permute(1,0) #m*bs
-        taget_score = self.aggregator2.propagate(edge_node,x = edge_score, size = (self.m,self.n) ).permute(1,0) #bs * n
-        #taget_score /= edge_degree
+        edge_score *= torch.index_select(r_mask, dim=0, index=relation_ids).permute(1,0) #m*bs
+        target_score = self.aggregator2.propagate(edge_node,x = edge_score, size = (self.m,self.n) ).permute(1,0) #bs * n
+
         if self.use_mlp:
-            taget_score = self.mlp(taget_score)
-        return taget_score
+            target_score = self.mlp(target_score)
+        return target_score
 
 class KGEModel(nn.Module):
     def __init__(self, args, model_name, nentity, nrelation, hidden_dim, gamma, mlp=False, relation_aware=False,
@@ -164,18 +177,14 @@ class KGEModel(nn.Module):
         self.relation_dim = hidden_dim*2 if double_relation_embedding else hidden_dim
         
         self.entity_embedding = nn.Parameter(torch.zeros(nentity, self.entity_dim))
-        nn.init.uniform_(
-            tensor=self.entity_embedding, 
-            a=-self.embedding_range.item(), 
-            b=self.embedding_range.item()
-        )
         
+        bound = 1.0 * 6 / math.sqrt(self.entity_embedding.shape[-1])
+        torch.nn.init.uniform_(self.entity_embedding, -bound, bound)
+
         self.relation_embedding = nn.Parameter(torch.zeros(nrelation, self.relation_dim))
-        nn.init.uniform_(
-            tensor=self.relation_embedding, 
-            a=-self.embedding_range.item(), 
-            b=self.embedding_range.item()
-        )
+
+        bound = 1.0 * 6 / math.sqrt(self.relation_embedding.shape[-1])
+        torch.nn.init.uniform_(self.relation_embedding, -bound, bound)
         
         if model_name == 'pRotatE':
             self.modulus = nn.Parameter(torch.Tensor([[0.5 * self.embedding_range.item()]]))
@@ -380,7 +389,7 @@ class KGEModel(nn.Module):
         optimizer.zero_grad()
 
         for _ in range(args.gradient_accumulation_steps):
-            positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)
+            positive_sample, negative_sample, subsampling_weight, mode, label = next(train_iterator)   # this label is deprecated
 
             if args.cuda:
                 positive_sample = positive_sample.cuda()
@@ -388,34 +397,35 @@ class KGEModel(nn.Module):
                 subsampling_weight = subsampling_weight.cuda()
 
             if model.config.negative_sample_size == -1:
-                negative_score = model((positive_sample, negative_sample), mode=mode)
-                if model.ible_weight != 0.0:
-                    if mode == 'head-batch':
-                        source_idx = positive_sample[:,2]
-                    else:
-                        source_idx = positive_sample[:,0]
+                
+                if 0.0 < model.ible_weight < 1.0:
+                    negative_score = model((positive_sample, negative_sample), mode=mode)
+                    source_idx = positive_sample[:,2] if mode == 'head-batch' else positive_sample[:,0]
+
                     emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
                     emb_all = model.entity_embedding
+
                     ible_score = model.ible(emb_batch,emb_all,source_idx,positive_sample[:,1],mode)
                     negative_score = model.merge_score(negative_score,ible_score)
-                else:
-                    negative_score = torch.sigmoid(negative_score)
+                elif model.ible_weight == 0.0:
+                    negative_score = model((positive_sample, negative_sample), mode=mode)
+                elif model.ible_weight == 1.0:
+                    source_idx = positive_sample[:,2] if mode == 'head-batch' else positive_sample[:,0]
 
-                if mode == 'head-batch':
-                    labels = positive_sample[:,0]
-                else:
-                    labels = positive_sample[:,2]
-                loss_fn = nn.CrossEntropyLoss(reduction='mean')
-                loss = loss_fn(negative_score, labels)
+                    emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
+                    emb_all = model.entity_embedding
+
+                    negative_score = model.ible(emb_batch,emb_all,source_idx,positive_sample[:,1],mode)
+
+                labels = positive_sample[:,0] if mode == 'head-batch' else positive_sample[:,2]
+                loss = F.cross_entropy(negative_score, labels)
             else:
-                negative_score = model((positive_sample, negative_sample), mode=mode)
-                positive_score = model(positive_sample)
+                if 0.0 < model.ible_weight < 1.0:
+                    negative_score = model((positive_sample, negative_sample), mode=mode)
+                    positive_score = model(positive_sample)
 
-                if model.ible_weight != 0.0:
-                    if mode == 'head-batch':
-                        source_idx = positive_sample[:,2]
-                    else:
-                        source_idx = positive_sample[:,0]
+                    source_idx = positive_sample[:,2] if mode == 'head-batch' else positive_sample[:,0]
+
                     emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
                     emb_all = model.entity_embedding
                     ible_score = model.ible(emb_batch, emb_all, source_idx, positive_sample[:,1], mode)
@@ -428,6 +438,21 @@ class KGEModel(nn.Module):
                     
                     negative_ible_score = torch.vstack([ible_score[i, negative_sample[i]] for i in range(negative_sample.shape[0])])
                     negative_score = model.merge_score(negative_score, negative_ible_score)
+                elif model.ible_weight == 0.0:
+                    negative_score = model((positive_sample, negative_sample), mode=mode)
+                    positive_score = model(positive_sample)
+                elif model.ible_weight == 1.0:
+                    source_idx = positive_sample[:,2] if mode == 'head-batch' else positive_sample[:,0]
+
+                    emb_batch = torch.index_select(model.entity_embedding,dim=0,index=source_idx)
+                    emb_all = model.entity_embedding
+                    ible_score = model.ible(emb_batch, emb_all, source_idx, positive_sample[:,1], mode)
+                    
+                    if mode == 'head-batch':
+                        positive_score = ible_score[torch.arange(positive_sample.shape[0]), positive_sample[:,0]]
+                    else:
+                        positive_score = ible_score[torch.arange(positive_sample.shape[0]), positive_sample[:,2]]
+                    negative_score = torch.vstack([ible_score[i, negative_sample[i]] for i in range(negative_sample.shape[0])])
 
                 if model.config.loss == 'crossentropy':
                     scores = torch.cat([positive_score, negative_score], dim=1)
@@ -575,10 +600,10 @@ class KGEModel(nn.Module):
                                 source_idx = positive_sample[:, 0]
                             emb_batch = torch.index_select(model.entity_embedding, dim=0, index=source_idx)
                             emb_all = model.entity_embedding
-                            ible_score = model.ible(emb_batch, emb_all, None,positive_sample[:,1], mode)
+                            ible_score = model.ible(emb_batch, emb_all, source_idx, positive_sample[:,1], mode)
                             score = model.merge_score(score,ible_score)
 
-                        score += filter_bias
+                        score += filter_bias * 10000
 
                         #Explicitly sort all the entities to ensure that there is no test exposure bias
                         argsort = torch.argsort(score, dim = 1, descending=True)
