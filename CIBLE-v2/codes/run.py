@@ -21,7 +21,6 @@ from dataloader import TrainDataset
 from dataloader import BidirectionalOneShotIterator
 
 import math
-import wandb
 from datetime import datetime
 from tqdm import tqdm
 
@@ -181,15 +180,11 @@ def set_logger(args):
     console.setFormatter(formatter)
     logging.getLogger('').addHandler(console)
 
-    wandb.init(project='cible', entity='chenxran', config=args)
-    wandb.run.log_code('.')
-
 
 def log_metrics(mode, step, metrics):
     '''
     Print the evaluation logs
     '''
-    wandb.log({"Step": step, **{f"{mode}/{k}": v for k, v in metrics.items()}})
     for metric in metrics:
         logging.info('%s %s at step %d: %f' % (mode, metric, step, metrics[metric]))
 
@@ -359,21 +354,36 @@ def main(args):
     
     # Set valid dataloader as it would be evaluated during training
 
-    # if args.do_valid:
-    #     logging.info('Evaluating on Test Dataset...')
-    #     metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
-    #     log_metrics('Test', step, metrics)
-    #     for k, v in metrics.items():
-    #         if k not in best_test_metrics:
-    #             best_test_metrics[k] = v
-    #         else:
-    #             if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
-    #                 if best_test_metrics[k] > v:
-    #                     best_test_metrics[k] = v
-    #             else:
-    #                 if best_test_metrics[k] < v:
-    #                     best_test_metrics[k] = v
-    #     log_metrics('Best-Test', step, best_test_metrics)
+    if args.do_valid:
+        logging.info('Evaluating on Valid Dataset...')
+        metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+        log_metrics('Valid', step, metrics)
+        for k, v in metrics.items():
+            if k not in best_valid_metrics:
+                best_valid_metrics[k] = v
+            else:
+                if k == "MR":
+                    if best_valid_metrics[k] > v:
+                        best_valid_metrics[k] = v
+                else:
+                    if best_valid_metrics[k] < v:
+                        best_valid_metrics[k] = v
+        log_metrics('Best-Valid', step, best_valid_metrics)
+
+        logging.info('Evaluating on Test Dataset...')
+        metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
+        log_metrics('Test', step, metrics)
+        for k, v in metrics.items():
+            if k not in best_test_metrics:
+                best_test_metrics[k] = v
+            else:
+                if k in ["MR", "loss", 'rotate_loss', 'identity_matrix_loss']:
+                    if best_test_metrics[k] > v:
+                        best_test_metrics[k] = v
+                else:
+                    if best_test_metrics[k] < v:
+                        best_test_metrics[k] = v
+        log_metrics('Best-Test', step, best_test_metrics)
     
     if args.do_train:
         logging.info('learning_rate = %d' % current_learning_rate)
@@ -403,10 +413,21 @@ def main(args):
                 log_metrics('Training average', step, metrics)
                 training_logs = []
                 
-            # if args.do_valid and step % args.valid_steps == 0 and step != 0:
-            #     logging.info('Evaluating on Valid Dataset...')
-            #     metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-            #     log_metrics('Valid', step, metrics)
+            if args.do_valid and step % args.valid_steps == 0 and step != 0:
+                logging.info('Evaluating on Valid Dataset...')
+                metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+                log_metrics('Valid', step, metrics)
+                for k, v in metrics.items():
+                    if k not in best_valid_metrics:
+                        best_valid_metrics[k] = v
+                    else:
+                        if k == "MR":
+                            if best_valid_metrics[k] > v:
+                                best_valid_metrics[k] = v
+                        else:
+                            if best_valid_metrics[k] < v:
+                                best_valid_metrics[k] = v
+                log_metrics('Best-Valid', step, best_valid_metrics)
 
             if args.do_test and step % args.valid_steps == 0 and step != 0:
                 logging.info('Evaluating on Test Dataset...')

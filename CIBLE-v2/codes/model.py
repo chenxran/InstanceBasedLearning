@@ -17,10 +17,7 @@ from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader
 
 from dataloader import TestDataset
-import wandb
 import math
-from typing import Union, Iterable
-import time
 from torch_geometric.nn import MessagePassing
 import torch.nn.functional as F
 torch.autograd.set_detect_anomaly(True)
@@ -33,7 +30,7 @@ ACTFN = {
 
 
 class IBLE(nn.Module):
-    def __init__(self, args, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
+    def __init__(self, args, edges, nrelation, nentity, gamma, mlp=False, relation_aware=False, entity_dim=None):
         super().__init__()
         self.config = args
         self.use_mlp = mlp
@@ -47,11 +44,6 @@ class IBLE(nn.Module):
         self.node_edge2 = []
         self.edge_node2 = []
         self.gamma = gamma
-        self.graph = {}
-        for h,r,t in edges:
-            if (r,t) not in self.graph:
-                self.graph[(r,t)] = []
-            self.graph[(r,t)].append(h)
 
         for i, (h,r,t) in enumerate(edges):
             self.node_edge1.append([h, i])
@@ -81,19 +73,14 @@ class IBLE(nn.Module):
         hidden_dim = entity_dim * 2 if self.config.double_entity_embedding else entity_dim
         if self.relation_aware == 'diag':
             self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
-            bound = 1.0 * 6 / math.sqrt(hidden_dim)
-            torch.nn.init.uniform_(self.head_r, -bound, bound)
-
             self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
-            bound = 1.0 * 6 / math.sqrt(hidden_dim)
-            torch.nn.init.uniform_(self.tail_r, -bound, bound)
         elif self.relation_aware == 'matrix':
             self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+
+        if self.relation_aware is not None:
             bound = 1.0 * 6 / math.sqrt(hidden_dim)
             torch.nn.init.uniform_(self.head_r, -bound, bound)
-
-            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
-            bound = 1.0 * 6 / math.sqrt(hidden_dim)
             torch.nn.init.uniform_(self.tail_r, -bound, bound)
 
     def forward(self, emb, all_emb, source_idx, relation_ids, mode): # bs * dim, nentity * dim
@@ -161,7 +148,7 @@ class KGEModel(nn.Module):
         self.epsilon = 2.0
         self.ible_weight = ible_weight
         if ible_weight!= 0.0:
-            self.ible = IBLE(args, train_triples, nrelation, nentity, gamma, epsilon=2.0, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
+            self.ible = IBLE(args, train_triples, nrelation, nentity, gamma, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
 
         self.gamma = nn.Parameter(
             torch.Tensor([gamma]), 
