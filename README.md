@@ -1,6 +1,6 @@
 # Instance-based Learning for Knowledge Base Completion
 
-This repository is the official implementation of [Instance-based Learning for Knowledge Base Completion](https://arxiv.org/abs/2110.13577). This paper has been accepted to NeurIPS 2022.
+This repository is the official implementation of [Instance-based Learning for Knowledge Base Completion](https://arxiv.org/abs/2110.13577). This paper has been accepted to NeurIPS 2022. The implementation of CIBLE is based on [RotatE](https://github.com/DeepGraphLearning/KnowledgeGraphEmbedding).
 
 ## Abstract
 In this paper, we proposed a new method for knowledge base completion (KBC): instance-based learning (IBL). For example, to answer (Jill Biden, lived city,? ), instead of going directly to Washington D.C., our goal is to find Joe Biden, who has the same lived city as Jill Biden. Through prototype entities, IBL provides interpretability. We developed theories for modeling prototypes and combining IBL with translational models. Experiments on various tasks have confirmed the IBL model’s effectiveness and interpretability.
@@ -26,6 +26,22 @@ python codes/run.py --cuda --do_train --do_valid --do_test -adv --activation=tan
     --mlp=True --model=TransE --negative_sample_size=-1 --pooling=add --regularization=0.1 --relation_aware=none \
     --save_checkpoint_steps=500 --save_path=models/umls --test_batch_size=16 --valid_steps=500
 ```
+
+
+|   IBLE     | MR | MRR | Hit@1 | Hit@3 | Hit@10 |
+|------------|-|-|-|-|-|
+|   FB15k-237       | 263   | 0.284 | 20.0 | 31.0 | 45.2 |
+|   WN18RR          | 7205  | 0.394 | 37.7 | 40.0 | 42.7 |
+|   Kinships        | 3.7   | 0.650 | 51.3 | 75.5 | 93.7 |
+|   UMLS            | 3.2   | 0.816 | 71.7 | 90.0 | 96.1 |
+
+|   CIBLE     | MR | MRR | Hit@1 | Hit@3 | Hit@10 |
+|------------|-|-|-|-|-|
+|   FB15k-237       | 170   | 0.341 | 24.6 | 37.8 | 53.2 |
+|   WN18RR          | 3400  | 0.490 | 44.6 | 50.7 | 57.5 |
+|   Kinships        | 3.0   | 0.728 | 60.3 | 82.0 | 95.6 |
+|   UMLS            | 2.6   | 0.856 | 78.7 | 91.6 | 97.0 |
+
 
 ### Train RNNLogic with only IBLE/non-IBLE rules
 To train RNNLogic with only IBLE/non-IBLE rules, we offer the commands for corresponding tasks in RNNLogic/run.sh. For example, you can run the following command to train RNNLogic with only IBLE rules on UMLS.
