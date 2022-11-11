@@ -1,4 +1,4 @@
-name: ori
+name: CIBLE
 channels:
   - pyg
   - pytorch
@@ -345,4 +345,3 @@ dependencies:
     - yarl==1.7.2
     - yaspin==2.1.0
     - zipp==3.7.0
-prefix: /home/chenxingran/anaconda3/envs/ori

@@ -26,3 +26,12 @@ python codes/run.py --cuda --do_train --do_valid --do_test -adv --activation=tan
     --mlp=True --model=TransE --negative_sample_size=-1 --pooling=add --regularization=0.1 --relation_aware=none \
     --save_checkpoint_steps=500 --save_path=models/umls --test_batch_size=16 --valid_steps=500
 ```
+
+### Train RNNLogic with only IBLE/non-IBLE rules
+To train RNNLogic with only IBLE/non-IBLE rules, we offer the commands for corresponding tasks in RNNLogic/run.sh. For example, you can run the following command to train RNNLogic with only IBLE rules on UMLS.
+```
+python codes/run.py --task umls --predictor_lr 5e-5 --predictor_early_break_rate 0.2 --max_rules 1000 --max_beam_rules 1000 \
+    --predictor_num_epoch 200000 --generator_num_epoch 10000 --num_em_epoch 1 --max_rule_len 3 --param_relation_embed True --train_with_rotate True \
+    --train_with_pgnd True --filter_with_pgnd True --filter_with_rotate True --filter_rule True --filter_with_recall True --enumerate_symmetric_rule True \
+    --only_symmetric_rule True --start 0
+```
