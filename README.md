@@ -12,7 +12,7 @@ In addition, IBL shed light on the mechanism of rule-based KBC models. Previous 
 To install requirements:
 
 ```
-conda env create -f environment.yml
+conda env create -f environment.yaml
 conda activate cible
 ```
 
