@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 
 from dataloader import TestDataset
 import math
+from typing import Union, Iterable
 from torch_geometric.nn import MessagePassing
 import torch.nn.functional as F
 torch.autograd.set_detect_anomaly(True)
@@ -29,8 +30,42 @@ ACTFN = {
 }
 
 
+
+def at_least_eps(x: torch.FloatTensor) -> torch.FloatTensor:
+    """Make sure a tensor is greater than zero."""
+    # get datatype specific epsilon
+    eps = torch.finfo(x.dtype).eps
+    # clamp minimum value
+    return x.clamp(min=eps)
+
+
+def clamp_norm(
+    x: torch.Tensor,
+    maxnorm: float,
+    p: Union[str, int] = "fro",
+    dim: Union[None, int, Iterable[int]] = None,
+) -> torch.Tensor:
+    """Ensure that a tensor's norm does not exceeds some threshold.
+
+    :param x:
+        The vector.
+    :param maxnorm:
+        The maximum norm (>0).
+    :param p:
+        The norm type.
+    :param dim:
+        The dimension(s).
+
+    :return:
+        A vector with $|x| <= maxnorm$.
+    """
+    norm = x.norm(p=p, dim=dim, keepdim=True)
+    mask = (norm < maxnorm).type_as(x)
+    return mask * x + (1 - mask) * (x / at_least_eps(norm) * maxnorm)
+
+
 class IBLE(nn.Module):
-    def __init__(self, args, edges, nrelation, nentity, gamma, mlp=False, relation_aware=False, entity_dim=None):
+    def __init__(self, args, edges, nrelation, nentity, gamma, epsilon, mlp=False, relation_aware=False, entity_dim=None):
         super().__init__()
         self.config = args
         self.use_mlp = mlp
@@ -44,6 +79,11 @@ class IBLE(nn.Module):
         self.node_edge2 = []
         self.edge_node2 = []
         self.gamma = gamma
+        self.graph = {}
+        for h,r,t in edges:
+            if (r,t) not in self.graph:
+                self.graph[(r,t)] = []
+            self.graph[(r,t)].append(h)
 
         for i, (h,r,t) in enumerate(edges):
             self.node_edge1.append([h, i])
@@ -64,23 +104,28 @@ class IBLE(nn.Module):
 
         if self.use_mlp:
             self.mlp = nn.Sequential(
-                nn.Linear(self.n, min(2 * self.n, 512)),
+                nn.Linear(self.n, min(2 * self.n, self.config.intermediate_dim)),
                 nn.Tanh(),
                 nn.Dropout(p=0.1),
-                nn.Linear(min(2 * self.n, 512), self.n),
+                nn.Linear(min(2 * self.n, self.config.intermediate_dim), self.n),
             )
 
         hidden_dim = entity_dim * 2 if self.config.double_entity_embedding else entity_dim
         if self.relation_aware == 'diag':
             self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
-            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
-        elif self.relation_aware == 'matrix':
-            self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
-            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
-
-        if self.relation_aware is not None:
             bound = 1.0 * 6 / math.sqrt(hidden_dim)
             torch.nn.init.uniform_(self.head_r, -bound, bound)
+
+            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.tail_r, -bound, bound)
+        elif self.relation_aware == 'matrix':
+            self.head_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
+            torch.nn.init.uniform_(self.head_r, -bound, bound)
+
+            self.tail_r = nn.Parameter(torch.randn(nrelation, hidden_dim, hidden_dim))
+            bound = 1.0 * 6 / math.sqrt(hidden_dim)
             torch.nn.init.uniform_(self.tail_r, -bound, bound)
 
     def forward(self, emb, all_emb, source_idx, relation_ids, mode): # bs * dim, nentity * dim
@@ -103,21 +148,26 @@ class IBLE(nn.Module):
             all_emb = all_emb.unsqueeze(1) * rel.unsqueeze(0)
         elif self.relation_aware == 'matrix':
             if mode == 'head-batch':
-                rel = self.head_r[relation_ids]
+                rel = self.head_r[relation_ids].view(-1, self.config.hidden_dim, self.config.hidden_dim)
             else:
-                rel = self.tail_r[relation_ids]
+                rel = self.tail_r[relation_ids].view(-1, self.config.hidden_dim, self.config.hidden_dim)
             emb = torch.bmm(emb.unsqueeze(1), rel)
             all_emb = torch.bmm(all_emb.repeat(bs, 1, 1), rel)
         elif self.relation_aware is None:
-            emb = emb.unsqueeze(0)
-            all_emb = all_emb.unsqueeze(1)
+            pass
+            # emb = emb.unsqueeze(0)
+            # all_emb = all_emb.unsqueeze(1)
 
         if self.config.cosine:
             if self.relation_aware == 'diag':
                 dis = ACTFN[self.config.activation](torch.bmm(all_emb.permute(1, 0, 2).contiguous(), emb.permute(1, 2, 0).contiguous()).squeeze(2).t())
             elif self.relation_aware is None:
-                dis = ACTFN[self.config.activation](torch.matmul(all_emb, emb.permute(0, 2, 1).contiguous()).squeeze(1))
+                dis = ACTFN[self.config.activation](torch.matmul(emb, all_emb.t())).t()
             elif self.relation_aware == 'matrix':
+                # if self.args.normalize:
+                # ensure constraints
+                emb = clamp_norm(emb, p=2.0, dim=-1, maxnorm=1.0)
+                all_emb = clamp_norm(all_emb, p=2.0, dim=-1, maxnorm=1.0)
                 dis = ACTFN[self.config.activation](torch.matmul(all_emb, emb.permute(0, 2, 1).contiguous()).squeeze(2).t())
         else:
             dis = (emb - all_emb).norm(p=1, dim=-1)
@@ -148,7 +198,7 @@ class KGEModel(nn.Module):
         self.epsilon = 2.0
         self.ible_weight = ible_weight
         if ible_weight!= 0.0:
-            self.ible = IBLE(args, train_triples, nrelation, nentity, gamma, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
+            self.ible = IBLE(args, train_triples, nrelation, nentity, gamma, epsilon=2.0, mlp=mlp, relation_aware=relation_aware, entity_dim=hidden_dim)
 
         self.gamma = nn.Parameter(
             torch.Tensor([gamma]), 
@@ -569,6 +619,7 @@ class KGEModel(nn.Module):
             step = 0
             total_steps = sum([len(dataset) for dataset in test_dataset_list])
 
+            ranks = {"head-batch": {}, "tail-batch": {}}
             with torch.no_grad():
                 for test_dataset in test_dataset_list:
                     for positive_sample, negative_sample, filter_bias, mode in test_dataset:
@@ -609,6 +660,7 @@ class KGEModel(nn.Module):
 
                             #ranking + 1 is the true ranking used in evaluation metrics
                             ranking = 1 + ranking.item()
+                            ranks[mode][str(positive_sample[i].tolist())] = ranking
                             logs.append({
                                 'MRR': 1.0/ranking,
                                 'MR': float(ranking),
@@ -621,9 +673,16 @@ class KGEModel(nn.Module):
                             logging.info('Evaluating the model... (%d/%d)' % (step, total_steps))
 
                         step += 1
+                    
+                    # sort
+                    # ranks[mode] = sorted(ranks[mode].items(), key=lambda x: x[0])
 
             metrics = {}
             for metric in logs[0].keys():
                 metrics[metric] = sum([log[metric] for log in logs])/len(logs)
+            
+            import json
+            # with open('ranks.json', 'w') as f:
+            #     f.write(json.dumps(ranks))
 
         return metrics

@@ -92,6 +92,7 @@ def parse_args(args=None):
     parser.add_argument('--cosine', default=False, type=bool)
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--activation', default='none', type=str)
+    parser.add_argument('--intermediate_dim', default=1024, type=int)
 
     args = parser.parse_args(args)
 

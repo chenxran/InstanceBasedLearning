@@ -10,6 +10,18 @@ python codes/run.py --cuda --do_train --do_valid --do_test -adv --activation=tan
     --mlp=True --model=TransE --negative_sample_size=-1 --pooling=add --regularization=0.2 --relation_aware=none \
     --save_checkpoint_steps=500 --save_path=models/kinship --test_batch_size=16 --valid_steps=500
 
+# Running IBLE on FB15k-237
+python codes/run.py --cuda --do_train --do_valid --do_test -adv --activation=tanh --batch_size=8 --cosine=True \
+    --data_path=data/FB15k-237 --gradient_accumulation_steps=64 --hidden_dim=512 --ible_weight=1 --learning_rate=0.0003 \
+    --log_steps=100 --max_steps=50000 --mlp=True --model=TransE --negative_sample_size=-1 --pooling=add --relation_aware=matrix \
+    --save_checkpoint_steps=500 --save_path=models/RotatE_umls_0 --test_batch_size=8 --valid_steps=2000
+
+
+# Running IBLE on WN18RR
+python codes/run.py --cuda --do_train --do_valid --do_test -adv --activation=tanh --batch_size=32 --cosine=True \
+    --data_path=data/wn18rr --gradient_accumulation_steps=2 --hidden_dim=256 --ible_weight=1 --learning_rate=0.0002 --log_steps=100 \
+    --max_steps=100000 --mlp=True --model=TransE --negative_sample_size=-1 --pooling=add --regularization=0.05 --relation_aware=none \
+    --save_checkpoint_steps=500 --save_path=models/RotatE_umls_0 --test_batch_size=16 --valid_steps=2000
 
 # Running CIBLE on UMLS
 python codes/run.py --cuda --do_train --do_valid --do_test -de -adv --pretrained --batch_size=256 --data_path=data/umls --gamma=12 \
