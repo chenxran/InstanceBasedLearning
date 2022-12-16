@@ -16,6 +16,8 @@ conda env create -f environment.yaml
 conda activate cible
 ```
 
+Download the datasets and corresponding checkpoints from [here](https://drive.google.com/file/d/159qfesBCgsM-MIn4MB4VV5PmiL9U9Vno/view?usp=sharing).
+
 ## Training
 
 ### Train IBLE/CIBLE
