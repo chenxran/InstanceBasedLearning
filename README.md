@@ -16,7 +16,7 @@ conda env create -f environment.yaml
 conda activate cible
 ```
 
-Download the datasets and corresponding checkpoints from [here](https://drive.google.com/file/d/159qfesBCgsM-MIn4MB4VV5PmiL9U9Vno/view?usp=sharing).
+Download the datasets and corresponding checkpoints from [here](https://drive.google.com/file/d/159qfesBCgsM-MIn4MB4VV5PmiL9U9Vno/view?usp=sharing). Note that the provided checkpoint are from repo of RNNLogic, and all of these checkpoints are used for accelerate the convergence of the CIBLE model.
 
 ## Training
 
