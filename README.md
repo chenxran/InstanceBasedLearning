@@ -1,6 +1,6 @@
 # Instance-based Learning for Knowledge Base Completion
 
-This repository is the official implementation of [Instance-based Learning for Knowledge Base Completion](https://arxiv.org/abs/2110.13577). This paper has been accepted to NeurIPS 2022. The implementation of CIBLE is based on [RotatE](https://github.com/DeepGraphLearning/KnowledgeGraphEmbedding).
+This repository is the official implementation of [Instance-based Learning for Knowledge Base Completion](https://arxiv.org/abs/2211.06807). This paper has been accepted to NeurIPS 2022. The implementation of CIBLE is based on [RotatE](https://github.com/DeepGraphLearning/KnowledgeGraphEmbedding).
 
 ## Abstract
 In this paper, we proposed a new method for knowledge base completion (KBC): instance-based learning (IBL). For example, to answer (Jill Biden, lived city,? ), instead of going directly to Washington D.C., our goal is to find Joe Biden, who has the same lived city as Jill Biden. Through prototype entities, IBL provides interpretability. We developed theories for modeling prototypes and combining IBL with translational models. Experiments on various tasks have confirmed the IBL model’s effectiveness and interpretability.
